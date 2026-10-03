@@ -1,0 +1,20 @@
+{
+  "scenario": "base",
+  "description": "Validated 37-bus baseline.",
+  "case_file": "cases/glover37.json",
+  "system_base_MVA": 100.0,
+  "scl_definition": "SCL_pu = V_nominal_pu * I_SCC_pu, with V_nominal_pu = 1.0",
+  "changes": [],
+  "power_flow_converged": true,
+  "short_circuit_attempted": true,
+  "short_circuit_converged": true,
+  "short_circuit_failed_buses": [],
+  "totals": {
+    "total_gen_MW": 820.0273152786798,
+    "total_load_MW": 805.72,
+    "total_shunt_MW": 0.6484288584209399,
+    "total_conv_MW": 0.0,
+    "total_losses_MW": 13.658886420258826,
+    "loss_pct": 1.6656623707244387
+  }
+}

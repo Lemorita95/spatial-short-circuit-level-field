@@ -1,0 +1,26 @@
+{
+  "scenario": "B3",
+  "description": "Transformer 28-29 circuit 1 disconnected.",
+  "case_file": "cases/glover37.json",
+  "system_base_MVA": 100.0,
+  "scl_definition": "SCL_pu = V_nominal_pu * I_SCC_pu, with V_nominal_pu = 1.0",
+  "changes": [
+    {
+      "action": "disconnect",
+      "element": "transformer.transformer 28-29 ckt 1",
+      "value": null
+    }
+  ],
+  "power_flow_converged": true,
+  "short_circuit_attempted": true,
+  "short_circuit_converged": true,
+  "short_circuit_failed_buses": [],
+  "totals": {
+    "total_gen_MW": 819.9415174985159,
+    "total_load_MW": 805.72,
+    "total_shunt_MW": 0.6480640408593535,
+    "total_conv_MW": 0.0,
+    "total_losses_MW": 13.573453457656548,
+    "loss_pct": 1.6554172667175762
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "scenario": "B2",
+  "description": "Line 21-48 circuit 1 disconnected.",
+  "case_file": "cases/glover37.json",
+  "system_base_MVA": 100.0,
+  "scl_definition": "SCL_pu = V_nominal_pu * I_SCC_pu, with V_nominal_pu = 1.0",
+  "changes": [
+    {
+      "action": "disconnect",
+      "element": "line.line 21-48 ckt 1",
+      "value": null
+    }
+  ],
+  "power_flow_converged": true,
+  "short_circuit_attempted": true,
+  "short_circuit_converged": true,
+  "short_circuit_failed_buses": [],
+  "totals": {
+    "total_gen_MW": 820.7197133670082,
+    "total_load_MW": 805.72,
+    "total_shunt_MW": 0.6480700778579603,
+    "total_conv_MW": 0.0,
+    "total_losses_MW": 14.351643289150246,
+    "loss_pct": 1.748665598669798
+  }
+}

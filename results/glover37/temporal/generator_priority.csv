@@ -1,0 +1,8 @@
+priority,generator,bus,unit_id,MWMin,MWMax
+1,generator.g28-1,28,1,0.0,150.0
+2,generator.g28-2,28,2,0.0,150.0
+3,generator.g44-1,44,1,20.0,150.0
+4,generator.g53-1,53,1,22.0,100.0
+5,generator.g50-1,50,1,38.0,80.0
+6,generator.g48-1,48,1,16.0,52.0
+7,generator.g14-1,14,1,10.0,35.0

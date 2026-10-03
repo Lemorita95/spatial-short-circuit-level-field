@@ -1,0 +1,26 @@
+{
+  "scenario": "A3",
+  "description": "Generator 14 disconnected.",
+  "case_file": "cases/glover37.json",
+  "system_base_MVA": 100.0,
+  "scl_definition": "SCL_pu = V_nominal_pu * I_SCC_pu, with V_nominal_pu = 1.0",
+  "changes": [
+    {
+      "action": "disconnect",
+      "element": "generator.g14-1",
+      "value": null
+    }
+  ],
+  "power_flow_converged": true,
+  "short_circuit_attempted": true,
+  "short_circuit_converged": true,
+  "short_circuit_failed_buses": [],
+  "totals": {
+    "total_gen_MW": 820.5016721985759,
+    "total_load_MW": 805.72,
+    "total_shunt_MW": 0.648362445211435,
+    "total_conv_MW": 0.0,
+    "total_losses_MW": 14.133309753364456,
+    "loss_pct": 1.7225205300914908
+  }
+}

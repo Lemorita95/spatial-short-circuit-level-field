@@ -1,0 +1,4 @@
+critical_hour_intact,critical_timestamp_intact,n_buses_with_minimum
+5,2025-11-12 22:00:00,2
+8,2025-11-13 01:00:00,15
+9,2025-11-13 02:00:00,20

@@ -1,0 +1,26 @@
+{
+  "scenario": "A2",
+  "description": "Generator 28 disconnected.",
+  "case_file": "cases/glover37.json",
+  "system_base_MVA": 100.0,
+  "scl_definition": "SCL_pu = V_nominal_pu * I_SCC_pu, with V_nominal_pu = 1.0",
+  "changes": [
+    {
+      "action": "disconnect",
+      "element": "generator.g28-1",
+      "value": null
+    }
+  ],
+  "power_flow_converged": true,
+  "short_circuit_attempted": true,
+  "short_circuit_converged": true,
+  "short_circuit_failed_buses": [],
+  "totals": {
+    "total_gen_MW": 819.4542314240734,
+    "total_load_MW": 805.72,
+    "total_shunt_MW": 0.6486514108719759,
+    "total_conv_MW": 0.0,
+    "total_losses_MW": 13.08558001320153,
+    "loss_pct": 1.5968652685411113
+  }
+}
