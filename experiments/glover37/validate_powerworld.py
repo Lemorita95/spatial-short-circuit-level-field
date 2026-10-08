@@ -12,7 +12,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = ROOT / "results" / "glover37"
-STATIC_ROOT = RESULTS_ROOT / "static"
+STATIC_RAW_ROOT = RESULTS_ROOT / "static" / "raw"
 VALIDATION_ROOT = RESULTS_ROOT / "validation"
 POWERWORLD_ROOT = ROOT / "data" / "powerworld" / "glover37"
 
@@ -52,7 +52,7 @@ def assert_same_buses(label: str, *frames: pd.DataFrame) -> None:
 
 
 def read_python(state: str) -> pd.DataFrame:
-    path = STATIC_ROOT / state / "results.csv"
+    path = STATIC_RAW_ROOT / state / "results.csv"
     if not path.is_file():
         raise FileNotFoundError(f"Python result file not found: {path}")
 

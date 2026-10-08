@@ -6,7 +6,9 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[2]
-RESULTS_ROOT = ROOT / "results" / "glover37" / "static"
+STATIC_ROOT = ROOT / "results" / "glover37" / "static"
+RAW_ROOT = STATIC_ROOT / "raw"
+ANALYSIS_ROOT = STATIC_ROOT / "analysis"
 
 S_BASE_MVA = 100.0
 
@@ -25,7 +27,7 @@ def result_file(
     name: str,
 ) -> Path:
     return (
-        RESULTS_ROOT
+        RAW_ROOT
         / name
         / "results.csv"
     )
@@ -35,7 +37,7 @@ def metadata_file(
     name: str,
 ) -> Path:
     return (
-        RESULTS_ROOT
+        RAW_ROOT
         / name
         / "metadata.json"
     )
@@ -503,9 +505,14 @@ def analyze_one(
     )
 
     output = (
-        RESULTS_ROOT
+        ANALYSIS_ROOT
         / scenario_name
         / "delta_from_base.csv"
+    )
+
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
     comparison.to_csv(

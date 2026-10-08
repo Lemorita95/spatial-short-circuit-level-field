@@ -1,0 +1,17 @@
+{
+  "scenario": "A3",
+  "description": "G14-1 disconnected",
+  "element": "generator.g14-1",
+  "kind": "generator",
+  "terminals": [
+    14
+  ],
+  "rank_Yet": 1,
+  "cond_middle": 1.0,
+  "max_Z_algorithm_error": 3.469446951953614e-17,
+  "mean_Z_algorithm_error": 6.376654061467208e-18,
+  "max_secondary_Y": 0.003236177726612041,
+  "mean_secondary_Y": 5.613219538341302e-06,
+  "baseline_max_Y_variation": 0.0,
+  "scenario_max_Y_variation": 0.0
+}

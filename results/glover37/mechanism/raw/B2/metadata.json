@@ -1,0 +1,18 @@
+{
+  "scenario": "B2",
+  "description": "Line 21-48 ckt 1 disconnected",
+  "element": "line.line 21-48 ckt 1",
+  "kind": "line",
+  "terminals": [
+    21,
+    48
+  ],
+  "rank_Yet": 2,
+  "cond_middle": 2.54134623533476,
+  "max_Z_algorithm_error": 6.973502068242161e-17,
+  "mean_Z_algorithm_error": 2.5191402071981475e-18,
+  "max_secondary_Y": 0.02563574508612971,
+  "mean_secondary_Y": 2.552256547919105e-05,
+  "baseline_max_Y_variation": 0.0,
+  "scenario_max_Y_variation": 0.0
+}

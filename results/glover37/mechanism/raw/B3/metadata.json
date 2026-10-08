@@ -1,0 +1,18 @@
+{
+  "scenario": "B3",
+  "description": "Transformer 28-29 ckt 1 disconnected",
+  "element": "transformer.transformer 28-29 ckt 1",
+  "kind": "transformer",
+  "terminals": [
+    28,
+    29
+  ],
+  "rank_Yet": 1,
+  "cond_middle": 1.7530288369112856,
+  "max_Z_algorithm_error": 6.938893903907228e-17,
+  "mean_Z_algorithm_error": 2.8262545477297363e-17,
+  "max_secondary_Y": 0.0008382885089489769,
+  "mean_secondary_Y": 3.272813150942401e-06,
+  "baseline_max_Y_variation": 0.0,
+  "scenario_max_Y_variation": 0.0
+}

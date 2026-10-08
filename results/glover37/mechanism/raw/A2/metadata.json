@@ -1,0 +1,17 @@
+{
+  "scenario": "A2",
+  "description": "G28-1 disconnected",
+  "element": "generator.g28-1",
+  "kind": "generator",
+  "terminals": [
+    28
+  ],
+  "rank_Yet": 1,
+  "cond_middle": 1.0,
+  "max_Z_algorithm_error": 2.8609792490763984e-17,
+  "mean_Z_algorithm_error": 3.227918064566279e-18,
+  "max_secondary_Y": 0.0010360493976832444,
+  "mean_secondary_Y": 4.579400070751008e-06,
+  "baseline_max_Y_variation": 0.0,
+  "scenario_max_Y_variation": 0.0
+}

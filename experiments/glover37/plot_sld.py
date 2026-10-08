@@ -1,18 +1,39 @@
+"""
+Publication-oriented one-line-diagram plots for the Glover 37-bus study.
+
+This script deliberately keeps responsibilities separated:
+
+* tools/axd_grid_viewer.py
+    Parses PowerWorld AXD display geometry, including DisplayBusField.
+
+* this file
+    Applies paper-specific styling, scenario highlighting, and ΔSCL data.
+
+Outputs are vector PDF by default; SVG is optional with --svg.
+
+Examples
+--------
+Paper overview (IEEE single-column width):
+    python -m experiments.glover37.plot_sld --overview
+
+One static ΔSCL scenario:
+    python -m experiments.glover37.plot_sld --scenario A2
+
+All static ΔSCL scenarios:
+    python -m experiments.glover37.plot_sld --all
+"""
+
+from __future__ import annotations
+
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
-import json
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import (
-    LinearSegmentedColormap,
-    Normalize,
-)
-from matplotlib.patches import (
-    Circle,
-    Rectangle,
-)
+from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.patches import Circle, Rectangle
 
 from tools.axd_grid_viewer import (
     AxdModel,
@@ -23,21 +44,13 @@ from tools.axd_grid_viewer import (
 )
 
 
+# =====================================================================
+# Paths
+# =====================================================================
+
 ROOT = Path(__file__).resolve().parents[2]
+
 CASE_FILE = ROOT / "cases" / "glover37.json"
-
-RESULTS_ROOT = (
-    ROOT
-    / "results"
-    / "glover37"
-    / "static"
-)
-
-FIGURES_ROOT = (
-    ROOT
-    / "figures"
-    / "glover37"
-)
 
 AXD_FILE = (
     ROOT
@@ -48,219 +61,202 @@ AXD_FILE = (
     / "DesignCase2_2010.axd"
 )
 
-
-SCENARIO_ORDER = [
-    "A1",
-    "A2",
-    "A3",
-    "B1",
-    "B2",
-    "B3",
-]
+STATIC_ANALYSIS_ROOT = ROOT / "results" / "glover37" / "static" / "analysis"
+FIGURES_ROOT = ROOT / "figures" / "glover37"
 
 
-# ------------------------------------------------------------
-# Plot settings
-# ------------------------------------------------------------
+# =====================================================================
+# Publication settings
+# =====================================================================
 
-# Set to None to use the absolute global maximum.
-GLOBAL_SCALE_PERCENTILE = 97.5
+# Measured from the supplied IEEE conference template.
+IEEE_COLUMN_WIDTH_IN = 3.49
+IEEE_TEXT_WIDTH_IN = 7.14
 
-# Display-only width multiplier for bus rectangles.
+# IEEE template guidance for text embedded in figures.
+FIGURE_FONT_SIZE_PT = 8.0
+
+# Display-only widening of bus rectangles. This does not modify AXD data.
 BUS_WIDTH_SCALE = 2.5
 
+# One restrained highlight style for all study modifications.
 HIGHLIGHT_COLOR = "#2166ac"
+HIGHLIGHT_LINESTYLE = "--"
+
+# Scenario-result plots use one common symmetric scale.
+GLOBAL_SCALE_PERCENTILE = 97.5
 
 
-# ------------------------------------------------------------
-# Scenario display information
-# ------------------------------------------------------------
+# =====================================================================
+# Study definitions
+# =====================================================================
 
-SCENARIO_HIGHLIGHTS = {
+SCENARIO_ORDER = ["A1", "A2", "A3", "B1", "B2", "B3"]
+
+SCENARIOS = {
     "A1": {
         "kind": "generator",
         "bus": 28,
         "gen_id": "1",
-        "label": "G28-1: P → 0 MW",
+        "description": "G28-1: P -> 0 MW",
     },
-
     "A2": {
         "kind": "generator",
         "bus": 28,
         "gen_id": "1",
-        "label": "G28-1 disconnected",
+        "description": "G28-1 disconnected",
     },
-
     "A3": {
         "kind": "generator",
         "bus": 14,
         "gen_id": "1",
-        "label": "G14-1 disconnected",
+        "description": "G14-1 disconnected",
     },
-
     "B1": {
         "kind": "line",
         "from_bus": 14,
         "to_bus": 34,
         "circuit": "1",
-        "label": "Line 14–34 disconnected",
+        "description": "Line 14-34 disconnected",
     },
-
     "B2": {
         "kind": "line",
         "from_bus": 21,
         "to_bus": 48,
         "circuit": "1",
-        "label": (
-            "Line 21–48 ckt 1 disconnected"
-        ),
+        "description": "Line 21-48 ckt 1 disconnected",
     },
-
     "B3": {
         "kind": "transformer",
         "from_bus": 28,
         "to_bus": 29,
         "circuit": "1",
-        "label": (
-            "Transformer 28–29 disconnected"
-        ),
+        "description": "Transformer 28-29 disconnected",
     },
 }
 
+# Unique elements shown in the benchmark overview.
+# A1 and A2 intentionally share one physical marker.
+OVERVIEW_ITEMS = [
+    {
+        "tag": "A1/A2",
+        "kind": "generator",
+        "bus": 28,
+        "gen_id": "1",
+    },
+    {
+        "tag": "A3",
+        "kind": "generator",
+        "bus": 14,
+        "gen_id": "1",
+    },
+    {
+        "tag": "B1",
+        "kind": "line",
+        "from_bus": 14,
+        "to_bus": 34,
+        "circuit": "1",
+    },
+    {
+        "tag": "B2",
+        "kind": "line",
+        "from_bus": 21,
+        "to_bus": 48,
+        "circuit": "1",
+    },
+    {
+        "tag": "B3",
+        "kind": "transformer",
+        "from_bus": 28,
+        "to_bus": 29,
+        "circuit": "1",
+    },
+    {
+        "tag": "C",
+        "kind": "line",
+        "from_bus": 39,
+        "to_bus": 47,
+        "circuit": "1",
+    },
+]
 
-def delta_file(
-    scenario: str,
-) -> Path:
 
-    return (
-        RESULTS_ROOT
-        / scenario
-        / "delta_from_base.csv"
-    )
+# =====================================================================
+# Data loading
+# =====================================================================
+
+def delta_file(scenario: str) -> Path:
+    return STATIC_ANALYSIS_ROOT / scenario / "delta_from_base.csv"
 
 
-def available_scenarios(
-) -> list[str]:
-
+def available_scenarios() -> list[str]:
     return [
         scenario
-        for scenario
-        in SCENARIO_ORDER
-        if delta_file(
-            scenario
-        ).is_file()
+        for scenario in SCENARIO_ORDER
+        if delta_file(scenario).is_file()
     ]
 
 
-def load_delta_scl(
-    scenario: str,
-) -> dict[int, float]:
-
-    path = delta_file(
-        scenario
-    )
+def load_delta_scl(scenario: str) -> dict[int, float]:
+    path = delta_file(scenario)
 
     if not path.is_file():
         raise FileNotFoundError(
-            f"Scenario results not found: "
-            f"{path}"
+            f"Scenario results not found: {path}"
         )
 
-    data = pd.read_csv(
-        path
-    )
+    data = pd.read_csv(path)
 
-    required = {
-        "bus",
-        "delta_SCL_pct",
-    }
-
-    missing = (
-        required
-        - set(
-            data.columns
-        )
-    )
+    required = {"bus", "delta_SCL_pct"}
+    missing = required - set(data.columns)
 
     if missing:
         raise ValueError(
-            f"{path} is missing columns: "
-            f"{sorted(missing)}"
+            f"{path} is missing columns: {sorted(missing)}"
         )
 
     return {
-        int(row.bus):
-            float(
-                row.delta_SCL_pct
-            )
-        for row
-        in data.itertuples()
+        int(row.bus): float(row.delta_SCL_pct)
+        for row in data.itertuples()
     }
 
 
 def common_scale(
     scenarios: list[str],
-    percentile: float | None = 97.5,
+    percentile: float | None = GLOBAL_SCALE_PERCENTILE,
 ) -> float:
-    """
-    Determine one symmetric ΔSCL scale shared by all
-    scenario figures.
-
-    If percentile is None, use the absolute maximum.
-    """
-
-    values = []
+    values: list[float] = []
 
     for scenario in scenarios:
-
         values.extend(
             abs(value)
-            for value
-            in load_delta_scl(
-                scenario
-            ).values()
+            for value in load_delta_scl(scenario).values()
         )
 
     if not values:
-        raise ValueError(
-            "No delta-SCL values found."
-        )
+        raise ValueError("No ΔSCL values found.")
 
     if percentile is None:
-
-        limit = max(
-            values
-        )
-
+        limit = max(values)
     else:
-
         limit = float(
-            pd.Series(
-                values
-            ).quantile(
-                percentile
-                / 100.0
+            pd.Series(values).quantile(
+                percentile / 100.0
             )
         )
 
-    if limit == 0:
-        limit = 1.0
-
-    return limit
+    return limit if limit > 0 else 1.0
 
 
 def active_generator_keys() -> set[tuple[int, str]]:
     """
-    Return active generators from the actual case model.
+    Return generators that are active in the actual JSON case.
 
-    The AXD may contain display objects for generators that are
-    currently out of service, so AXD presence alone is not enough.
+    AXD files may still contain display objects for equipment that is
+    out of service, so AXD presence alone is not an activity test.
     """
-
     case = json.loads(
-        CASE_FILE.read_text(
-            encoding="utf-8"
-        )
+        CASE_FILE.read_text(encoding="utf-8")
     )
 
     return {
@@ -273,32 +269,122 @@ def active_generator_keys() -> set[tuple[int, str]]:
     }
 
 
-def draw_network(
+# =====================================================================
+# AXD lookup helpers
+# =====================================================================
+
+def find_generator(
+    model: AxdModel,
+    *,
+    bus: int,
+    gen_id: str,
+) -> Generator:
+    gen_id = str(gen_id).strip()
+
+    generator = next(
+        (
+            item
+            for item in model.generators
+            if item.bus == bus
+            and item.gen_id.strip() == gen_id
+        ),
+        None,
+    )
+
+    if generator is None:
+        raise ValueError(
+            f"Generator {bus}:{gen_id} not found in AXD."
+        )
+
+    return generator
+
+
+def find_edge(
+    model: AxdModel,
+    *,
+    kind: str,
+    from_bus: int,
+    to_bus: int,
+    circuit: str,
+):
+    if kind == "line":
+        candidates = model.lines
+    elif kind == "transformer":
+        candidates = model.transformers
+    else:
+        raise ValueError(
+            f"Unsupported edge kind: {kind}"
+        )
+
+    edge = next(
+        (
+            item
+            for item in candidates
+            if {
+                item.from_bus,
+                item.to_bus,
+            }
+            == {
+                from_bus,
+                to_bus,
+            }
+            and str(item.circuit).strip()
+            == str(circuit).strip()
+        ),
+        None,
+    )
+
+    if edge is None:
+        raise ValueError(
+            f"{kind} {from_bus}-{to_bus} "
+            f"ckt {circuit} not found in AXD."
+        )
+
+    return edge
+
+
+def bus_label_position(
+    model: AxdModel,
+    bus_number: int,
+) -> tuple[float, float] | None:
+    """
+    Use the original AXD DisplayBusField position.
+
+    This requires the updated axd_grid_viewer.py in which AxdModel
+    exposes bus_field_position(). The Name-field anchor is reused for
+    the bus number shown in the paper figure.
+    """
+    getter = getattr(
+        model,
+        "bus_field_position",
+        None,
+    )
+
+    if getter is None:
+        raise RuntimeError(
+            "AxdModel does not expose bus_field_position(). "
+            "Use the updated tools/axd_grid_viewer.py that parses "
+            "DisplayBusField."
+        )
+
+    return getter(bus_number, "Name")
+
+
+# =====================================================================
+# Drawing primitives
+# =====================================================================
+
+def draw_network_background(
     ax,
     model: AxdModel,
 ) -> None:
     """
-    Draw passive network and generator symbols as
-    subdued SLD background.
+    Draw passive network geometry and active generators in subdued gray.
     """
-
-    # ---------------------------------------------------------
-    # Transmission lines
-    # ---------------------------------------------------------
-
+    # Lines
     for edge in model.lines:
-
-        xs = [
-            point[0]
-            for point
-            in edge.coordinates
-        ]
-
-        ys = [
-            point[1]
-            for point
-            in edge.coordinates
-        ]
+        xs = [p[0] for p in edge.coordinates]
+        ys = [p[1] for p in edge.coordinates]
 
         ax.plot(
             xs,
@@ -306,29 +392,15 @@ def draw_network(
             color="0.78",
             linewidth=max(
                 0.7,
-                0.7
-                * edge.thickness,
+                0.7 * edge.thickness,
             ),
             zorder=1,
         )
 
-    # ---------------------------------------------------------
     # Transformers
-    # ---------------------------------------------------------
-
     for edge in model.transformers:
-
-        xs = [
-            point[0]
-            for point
-            in edge.coordinates
-        ]
-
-        ys = [
-            point[1]
-            for point
-            in edge.coordinates
-        ]
+        xs = [p[0] for p in edge.coordinates]
+        ys = [p[1] for p in edge.coordinates]
 
         ax.plot(
             xs,
@@ -336,52 +408,26 @@ def draw_network(
             color="0.70",
             linewidth=max(
                 0.8,
-                0.8
-                * edge.thickness,
+                0.8 * edge.thickness,
             ),
             zorder=2,
         )
 
-        (
-            mx,
-            my,
-            ux,
-            uy,
-        ) = (
-            _segment_midpoint(
-                edge.coordinates,
-                edge.symbol_segment,
-            )
+        mx, my, ux, uy = _segment_midpoint(
+            edge.coordinates,
+            edge.symbol_segment,
         )
 
         radius = 0.65
         offset = 0.55
 
-        for sign in (
-            -1.0,
-            1.0,
-        ):
-
-            cx = (
-                mx
-                + sign
-                * offset
-                * ux
-            )
-
-            cy = (
-                my
-                + sign
-                * offset
-                * uy
-            )
+        for sign in (-1.0, 1.0):
+            cx = mx + sign * offset * ux
+            cy = my + sign * offset * uy
 
             ax.add_patch(
                 Circle(
-                    (
-                        cx,
-                        cy,
-                    ),
+                    (cx, cy),
                     radius=radius,
                     facecolor="white",
                     edgecolor="0.70",
@@ -390,20 +436,16 @@ def draw_network(
                 )
             )
 
-    # ---------------------------------------------------------
-    # Generators
-    # ---------------------------------------------------------
-
-    active_generators = active_generator_keys()
+    # Only generators that are active in the actual case.
+    active = active_generator_keys()
 
     for generator in model.generators:
-
         key = (
             generator.bus,
             generator.gen_id.strip(),
         )
 
-        if key not in active_generators:
+        if key not in active:
             continue
 
         draw_generator_symbol(
@@ -418,507 +460,455 @@ def draw_network(
 
 def draw_bus(
     ax,
+    model: AxdModel,
     bus,
-    color,
-    value: float,
-    show_values: bool,
+    *,
+    facecolor: str,
+    value: float | None = None,
+    show_value: bool = False,
+    font_size: float = FIGURE_FONT_SIZE_PT,
 ) -> None:
     """
-    Draw a colored PowerWorld bus rectangle.
+    Draw one bus rectangle and its paper label.
 
-    AXD bus length is preserved exactly.
-    Width is visually enlarged by BUS_WIDTH_SCALE.
+    Bus geometry comes from DisplayBus.
+    Label placement comes from DisplayBusField(Name).
     """
+    orientation = bus.orientation.lower()
 
-    orientation = (
-        bus.orientation.lower()
-    )
-
-    length = (
-        bus.size
-    )
-
-    width = (
-        bus.width
-        * BUS_WIDTH_SCALE
-    )
+    length = bus.size
+    width = bus.width * BUS_WIDTH_SCALE
 
     if orientation == "right":
-
-        x0 = (
-            bus.x
-        )
-
-        y0 = (
-            bus.y
-            - width / 2.0
-        )
-
+        x0 = bus.x
+        y0 = bus.y - width / 2.0
         rect_width = length
         rect_height = width
-
-        label_x = (
-            bus.x
-            + length / 2.0
-        )
-
-        label_y = (
-            bus.y
-            + width / 2.0
-            + 0.7
-        )
-
-        ha = "center"
-        va = "bottom"
 
     elif orientation == "left":
-
-        x0 = (
-            bus.x
-            - length
-        )
-
-        y0 = (
-            bus.y
-            - width / 2.0
-        )
-
+        x0 = bus.x - length
+        y0 = bus.y - width / 2.0
         rect_width = length
         rect_height = width
 
-        label_x = (
-            bus.x
-            - length / 2.0
-        )
-
-        label_y = (
-            bus.y
-            + width / 2.0
-            + 0.7
-        )
-
-        ha = "center"
-        va = "bottom"
-
     elif orientation == "up":
-
-        x0 = (
-            bus.x
-            - width / 2.0
-        )
-
-        y0 = (
-            bus.y
-        )
-
+        x0 = bus.x - width / 2.0
+        y0 = bus.y
         rect_width = width
         rect_height = length
-
-        label_x = (
-            bus.x
-            + width / 2.0
-            + 0.7
-        )
-
-        label_y = (
-            bus.y
-            + length / 2.0
-        )
-
-        ha = "left"
-        va = "center"
 
     elif orientation == "down":
-
-        x0 = (
-            bus.x
-            - width / 2.0
-        )
-
-        y0 = (
-            bus.y
-            - length
-        )
-
+        x0 = bus.x - width / 2.0
+        y0 = bus.y - length
         rect_width = width
         rect_height = length
-
-        label_x = (
-            bus.x
-            + width / 2.0
-            + 0.7
-        )
-
-        label_y = (
-            bus.y
-            - length / 2.0
-        )
-
-        ha = "left"
-        va = "center"
 
     else:
         raise ValueError(
             f"Unsupported bus orientation "
-            f"{bus.orientation!r} "
-            f"for bus {bus.number}"
+            f"{bus.orientation!r} for bus {bus.number}."
         )
 
     ax.add_patch(
         Rectangle(
-            (
-                x0,
-                y0,
-            ),
+            (x0, y0),
             rect_width,
             rect_height,
-            facecolor=color,
-            edgecolor="0.45",
-            linewidth=1.0,
+            facecolor=facecolor,
+            edgecolor="0.35",
+            linewidth=0.8,
             zorder=9,
         )
     )
 
-    if show_values:
+    label_xy = bus_label_position(
+        model,
+        bus.number,
+    )
 
-        label = (
-            f"{bus.number}\n"
-            f"{value:+.1f}%"
-        )
+    if label_xy is None:
+        # Defensive fallback only. With the current AXD all displayed
+        # buses are expected to have a Name field.
+        label_xy = (bus.x, bus.y)
 
+    if show_value and value is not None:
+        label = f"{bus.number}\n{value:+.1f}%"
     else:
-
-        label = str(
-            bus.number
-        )
+        label = str(bus.number)
 
     ax.text(
-        label_x,
-        label_y,
+        label_xy[0],
+        label_xy[1],
         label,
-        fontsize=7,
-        ha=ha,
-        va=va,
+        fontsize=font_size,
+        ha="left",
+        va="bottom",
         color="black",
+        clip_on=False,
         zorder=30,
     )
 
-def find_generator(
-    model: AxdModel,
-    bus: int,
-    gen_id: str,
-) -> Generator:
-    """
-    Find an exact DisplayGen object by bus and generator ID.
-    """
 
-    gen_id = (
-        str(gen_id)
-        .strip()
-    )
-
-    generator = next(
-        (
-            generator
-            for generator
-            in model.generators
-            if generator.bus
-            == bus
-            and generator.gen_id.strip()
-            == gen_id
-        ),
-        None,
-    )
-
-    if generator is None:
-        raise ValueError(
-            f"Generator {bus}:{gen_id} "
-            f"not found in AXD."
-        )
-
-    return generator
-
-
-def highlight_generator(
+def draw_highlighted_generator(
     ax,
     generator: Generator,
-    label: str,
+    *,
+    tag: str | None,
 ) -> None:
-    """
-    Highlight the actual DisplayGen symbol from the AXD.
-    """
-
-    # First draw a thicker blue symbol underneath.
     draw_generator_symbol(
         ax,
         generator,
         edgecolor=HIGHLIGHT_COLOR,
         facecolor="white",
-        linewidth=3.2,
-        zorder=10,
+        linewidth=2.2,
+        zorder=15,
     )
 
-    # Then redraw a slightly thinner inner symbol.
-    draw_generator_symbol(
-        ax,
-        generator,
-        edgecolor=HIGHLIGHT_COLOR,
-        facecolor="white",
-        linewidth=1.8,
-        zorder=11,
-    )
-
-    ax.annotate(
-        label,
-        xy=(
-            generator.x,
-            generator.y,
-        ),
-        xytext=(
-            8,
-            8,
-        ),
-        textcoords=(
-            "offset points"
-        ),
-        fontsize=8,
-        color=HIGHLIGHT_COLOR,
-        fontweight="bold",
-        zorder=12,
-    )
+    if tag is not None:
+        ax.annotate(
+            tag,
+            xy=(generator.x, generator.y),
+            xytext=(4, 4),
+            textcoords="offset points",
+            fontsize=FIGURE_FONT_SIZE_PT,
+            fontweight="bold",
+            color=HIGHLIGHT_COLOR,
+            ha="left",
+            va="bottom",
+            annotation_clip=False,
+            clip_on=False,
+            bbox={
+                "boxstyle": "round,pad=0.12",
+                "facecolor": "white",
+                "edgecolor": HIGHLIGHT_COLOR,
+                "linewidth": 0.6,
+            },
+            zorder=40,
+        )
 
 
-def highlight_edge(
+def draw_highlighted_edge(
     ax,
     edge,
-    label: str,
+    *,
+    tag: str | None,
 ) -> None:
-    """
-    Highlight an exact AXD line or transformer path.
-    """
-
-    xs = [
-        point[0]
-        for point
-        in edge.coordinates
-    ]
-
-    ys = [
-        point[1]
-        for point
-        in edge.coordinates
-    ]
+    xs = [p[0] for p in edge.coordinates]
+    ys = [p[1] for p in edge.coordinates]
 
     ax.plot(
         xs,
         ys,
         color=HIGHLIGHT_COLOR,
-        linewidth=2.8,
-        linestyle="--",
-        zorder=9,
+        linewidth=2.0,
+        linestyle=HIGHLIGHT_LINESTYLE,
+        zorder=15,
     )
 
-    (
-        mx,
-        my,
-        _,
-        _,
-    ) = (
-        _segment_midpoint(
-            edge.coordinates,
-            edge.symbol_segment,
-        )
+    if tag is None:
+        return
+
+    mx, my, _, _ = _segment_midpoint(
+        edge.coordinates,
+        edge.symbol_segment,
     )
 
     ax.annotate(
-        label,
-        xy=(
-            mx,
-            my,
-        ),
-        xytext=(
-            8,
-            8,
-        ),
-        textcoords=(
-            "offset points"
-        ),
-        fontsize=8,
-        color=HIGHLIGHT_COLOR,
+        tag,
+        xy=(mx, my),
+        xytext=(4, 4),
+        textcoords="offset points",
+        fontsize=FIGURE_FONT_SIZE_PT,
         fontweight="bold",
-        zorder=12,
+        color=HIGHLIGHT_COLOR,
+        ha="left",
+        va="bottom",
+        annotation_clip=False,
+        clip_on=False,
+        bbox={
+            "boxstyle": "round,pad=0.12",
+            "facecolor": "white",
+            "edgecolor": HIGHLIGHT_COLOR,
+            "linewidth": 0.6,
+        },
+        zorder=40,
     )
 
 
-def highlight_scenario_change(
+# =====================================================================
+# Figure sizing / cropping
+# =====================================================================
+
+def fit_axes_to_drawn_network(
+    fig,
     ax,
-    model: AxdModel,
-    scenario: str,
+    *,
+    target_width_in: float,
+    data_margin_fraction: float = 0.008,
 ) -> None:
+    """
+    Fit the axes tightly around the actual network artists.
 
-    change = (
-        SCENARIO_HIGHLIGHTS.get(
-            scenario
-        )
+    Important:
+    - matplotlib line/patch artists determine the primary-element bounds;
+    - text/annotations are deliberately NOT used to enlarge the data
+      limits, but bbox_inches='tight' includes them on export;
+    - figure height is derived from the resulting data aspect ratio;
+    - therefore the network fills the requested width without clipping
+      the primary elements or leaving avoidable left/right whitespace.
+    """
+    ax.relim()
+    ax.autoscale_view(tight=True)
+
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+
+    xspan = max(xmax - xmin, 1e-9)
+    yspan = max(ymax - ymin, 1e-9)
+
+    xpad = data_margin_fraction * xspan
+    ypad = data_margin_fraction * yspan
+
+    xmin -= xpad
+    xmax += xpad
+    ymin -= ypad
+    ymax += ypad
+
+    xspan = xmax - xmin
+    yspan = ymax - ymin
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    ax.set_aspect("equal", adjustable="box")
+    ax.margins(0.0)
+    ax.set_axis_off()
+
+    target_height_in = (
+        target_width_in
+        * yspan
+        / xspan
     )
 
-    if change is None:
-        return
-
-    # ---------------------------------------------------------
-    # Generator
-    # ---------------------------------------------------------
-
-    if change["kind"] == "generator":
-
-        generator = (
-            find_generator(
-                model,
-                bus=change["bus"],
-                gen_id=change[
-                    "gen_id"
-                ],
-            )
-        )
-
-        highlight_generator(
-            ax,
-            generator,
-            change["label"],
-        )
-
-        return
-
-    # ---------------------------------------------------------
-    # Line
-    # ---------------------------------------------------------
-
-    if change["kind"] == "line":
-
-        candidates = (
-            model.lines
-        )
-
-    # ---------------------------------------------------------
-    # Transformer
-    # ---------------------------------------------------------
-
-    elif (
-        change["kind"]
-        == "transformer"
-    ):
-
-        candidates = (
-            model.transformers
-        )
-
-    else:
-        raise ValueError(
-            f"Unknown highlight kind: "
-            f"{change['kind']}"
-        )
-
-    edge = next(
-        (
-            edge
-            for edge
-            in candidates
-
-            if {
-                edge.from_bus,
-                edge.to_bus,
-            }
-            == {
-                change[
-                    "from_bus"
-                ],
-                change[
-                    "to_bus"
-                ],
-            }
-
-            and str(
-                edge.circuit
-            ).strip()
-            == str(
-                change[
-                    "circuit"
-                ]
-            ).strip()
-        ),
-        None,
+    fig.set_size_inches(
+        target_width_in,
+        target_height_in,
+        forward=True,
     )
 
-    if edge is None:
-        raise ValueError(
-            "Scenario element not "
-            f"found in AXD: {change}"
-        )
-
-    highlight_edge(
-        ax,
-        edge,
-        change["label"],
+    fig.subplots_adjust(
+        left=0.0,
+        right=1.0,
+        bottom=0.0,
+        top=1.0,
     )
 
 
-def render_scenario(
-    model: AxdModel,
-    scenario: str,
-    limit: float,
-    show: bool = False,
-    show_values: bool = True,
-) -> Path:
-
-    values = load_delta_scl(
-        scenario
-    )
-
+def save_figure(
+    fig,
+    stem: Path,
+    *,
+    save_svg: bool = False,
+) -> list[Path]:
+    """Save the publication PDF and, optionally, an SVG copy."""
     FIGURES_ROOT.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    output = (
-        FIGURES_ROOT
-        / (
-            f"{scenario}"
-            "_delta_scl_sld.svg"
-        )
-    )
+    written: list[Path] = []
 
-    fig, ax = plt.subplots(
-        figsize=(
-            14,
-            9,
-        )
+    pdf_path = stem.with_suffix(".pdf")
+    fig.savefig(
+        pdf_path,
+        format="pdf",
+        bbox_inches="tight",
+        pad_inches=0.01,
     )
+    written.append(pdf_path)
 
-    draw_network(
+    if save_svg:
+        svg_path = stem.with_suffix(".svg")
+        fig.savefig(
+            svg_path,
+            format="svg",
+            bbox_inches="tight",
+            pad_inches=0.01,
+        )
+        written.append(svg_path)
+
+    return written
+
+
+# =====================================================================
+# Paper overview
+# =====================================================================
+
+def render_overview(
+    *,
+    width_in: float = IEEE_COLUMN_WIDTH_IN,
+    save_svg: bool = False,
+    show: bool = False,
+) -> list[Path]:
+    """
+    Render the benchmark topology with all study elements highlighted.
+
+    This is the candidate Fig. 1:
+      A1/A2  generator at bus 28
+      A3     generator at bus 14
+      B1     line 14-34
+      B2     line 21-48
+      B3     transformer 28-29
+      C      temporal contingency line 39-47
+    """
+    model = parse_axd(AXD_FILE)
+
+    fig, ax = plt.subplots()
+
+    draw_network_background(
         ax,
         model,
     )
 
-    # ---------------------------------------------------------
-    # ΔSCL colormap
-    #
-    # negative = red
-    # zero     = white
-    # positive = green
-    # ---------------------------------------------------------
-
-    cmap = (
-        LinearSegmentedColormap
-        .from_list(
-            "red_white_green",
-            [
-                "#b2182b",
-                "#ffffff",
-                "#1a9850",
-            ],
-            N=256,
+    for bus in model.buses:
+        draw_bus(
+            ax,
+            model,
+            bus,
+            facecolor="white",
+            font_size=FIGURE_FONT_SIZE_PT,
         )
+
+    for item in OVERVIEW_ITEMS:
+        if item["kind"] == "generator":
+            generator = find_generator(
+                model,
+                bus=item["bus"],
+                gen_id=item["gen_id"],
+            )
+
+            draw_highlighted_generator(
+                ax,
+                generator,
+                tag=item["tag"],
+            )
+
+        else:
+            edge = find_edge(
+                model,
+                kind=item["kind"],
+                from_bus=item["from_bus"],
+                to_bus=item["to_bus"],
+                circuit=item["circuit"],
+            )
+
+            draw_highlighted_edge(
+                ax,
+                edge,
+                tag=item["tag"],
+            )
+
+    fit_axes_to_drawn_network(
+        fig,
+        ax,
+        target_width_in=width_in,
     )
+
+    stem = (
+        FIGURES_ROOT
+        / "benchmark_overview_tags"
+    )
+
+    written = save_figure(
+        fig,
+        stem,
+        save_svg=save_svg,
+    )
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    for path in written:
+        print(f"Wrote: {path}")
+
+    return written
+
+
+# =====================================================================
+# Static ΔSCL network maps
+# =====================================================================
+
+def delta_colormap():
+    return LinearSegmentedColormap.from_list(
+        "red_white_green",
+        [
+            "#b2182b",
+            "#ffffff",
+            "#1a9850",
+        ],
+        N=256,
+    )
+
+
+def highlight_scenario_element(
+    ax,
+    model: AxdModel,
+    scenario: str,
+) -> None:
+    item = SCENARIOS[scenario]
+
+    if item["kind"] == "generator":
+        generator = find_generator(
+            model,
+            bus=item["bus"],
+            gen_id=item["gen_id"],
+        )
+
+        draw_highlighted_generator(
+            ax,
+            generator,
+            tag=scenario,
+        )
+
+        return
+
+    edge = find_edge(
+        model,
+        kind=item["kind"],
+        from_bus=item["from_bus"],
+        to_bus=item["to_bus"],
+        circuit=item["circuit"],
+    )
+
+    draw_highlighted_edge(
+        ax,
+        edge,
+        tag=scenario,
+    )
+
+
+def render_scenario(
+    scenario: str,
+    *,
+    limit: float | None = None,
+    width_in: float = IEEE_TEXT_WIDTH_IN,
+    show_values: bool = True,
+    save_svg: bool = False,
+    show: bool = False,
+) -> list[Path]:
+    model = parse_axd(AXD_FILE)
+    values = load_delta_scl(scenario)
+
+    if limit is None:
+        scenarios = available_scenarios()
+
+        limit = common_scale(
+            scenarios,
+            percentile=GLOBAL_SCALE_PERCENTILE,
+        )
+
+    cmap = delta_colormap()
 
     norm = Normalize(
         vmin=-limit,
@@ -926,66 +916,43 @@ def render_scenario(
         clip=True,
     )
 
-    # ---------------------------------------------------------
-    # Bus ΔSCL values
-    # ---------------------------------------------------------
+    fig, ax = plt.subplots()
 
-    for bus in (
-        model.buses
-    ):
+    draw_network_background(
+        ax,
+        model,
+    )
 
-        value = (
-            values.get(
-                bus.number
-            )
-        )
+    for bus in model.buses:
+        value = values.get(bus.number)
 
         if value is None:
-
-            color = (
-                "0.85"
-            )
-
+            facecolor = "0.85"
             value = 0.0
-
         else:
-
-            color = cmap(
-                norm(
-                    value
-                )
-            )
+            facecolor = cmap(norm(value))
 
         draw_bus(
             ax,
+            model,
             bus,
-            color,
-            value,
-            show_values,
+            facecolor=facecolor,
+            value=value,
+            show_value=show_values,
+            font_size=FIGURE_FONT_SIZE_PT,
         )
 
-    # ---------------------------------------------------------
-    # Experimental modification
-    # ---------------------------------------------------------
-
-    highlight_scenario_change(
+    highlight_scenario_element(
         ax,
         model,
         scenario,
     )
 
-    # ---------------------------------------------------------
-    # Color bar
-    # ---------------------------------------------------------
-
     scalar = ScalarMappable(
         norm=norm,
         cmap=cmap,
     )
-
-    scalar.set_array(
-        []
-    )
+    scalar.set_array([])
 
     colorbar = fig.colorbar(
         scalar,
@@ -994,200 +961,136 @@ def render_scenario(
         pad=0.02,
         extend=(
             "both"
-            if (
-                GLOBAL_SCALE_PERCENTILE
-                is not None
-            )
+            if GLOBAL_SCALE_PERCENTILE is not None
             else "neither"
         ),
     )
 
     colorbar.set_label(
-        "Short-circuit level change, ΔSCL (%)"
+        "Short-circuit level change, ΔSCL (%)",
+        fontsize=FIGURE_FONT_SIZE_PT,
     )
 
-    # ---------------------------------------------------------
-    # Figure formatting
-    # ---------------------------------------------------------
-
-    ax.set_aspect(
-        "equal",
-        adjustable="datalim",
+    colorbar.ax.tick_params(
+        labelsize=FIGURE_FONT_SIZE_PT,
     )
 
-    ax.autoscale(
-        enable=True,
-        axis="both",
-        tight=False,
+    fit_axes_to_drawn_network(
+        fig,
+        ax,
+        target_width_in=width_in,
     )
 
-    ax.margins(
-        0.04
+    stem = (
+        FIGURES_ROOT
+        / f"{scenario}_delta_scl_sld"
     )
 
-    ax.set_axis_off()
-
-    ax.set_title(
-        f"{scenario} — "
-        f"short-circuit level change"
-    )
-
-    fig.tight_layout()
-
-    fig.savefig(
-        output,
-        format="svg",
-        bbox_inches="tight",
+    written = save_figure(
+        fig,
+        stem,
+        save_svg=save_svg,
     )
 
     if show:
         plt.show()
-
     else:
-        plt.close(
-            fig
-        )
+        plt.close(fig)
 
-    print(
-        f"Wrote: {output}"
-    )
+    for path in written:
+        print(f"Wrote: {path}")
 
-    return output
+    return written
 
 
 def render_all(
-    show: bool,
+    *,
+    width_in: float,
     show_values: bool,
+    save_svg: bool,
+    show: bool,
 ) -> None:
-
-    scenarios = (
-        available_scenarios()
-    )
+    scenarios = available_scenarios()
 
     if not scenarios:
         raise RuntimeError(
-            "No analyzed scenario "
-            "results found."
+            "No analyzed static scenarios found."
         )
-
-    model = parse_axd(
-        AXD_FILE
-    )
 
     limit = common_scale(
         scenarios,
-        percentile=(
-            GLOBAL_SCALE_PERCENTILE
-        ),
+        percentile=GLOBAL_SCALE_PERCENTILE,
     )
-
-    if (
-        GLOBAL_SCALE_PERCENTILE
-        is None
-    ):
-
-        scale_description = (
-            "absolute maximum"
-        )
-
-    else:
-
-        scale_description = (
-            f"{GLOBAL_SCALE_PERCENTILE}"
-            "th percentile"
-        )
 
     print(
         "Scenarios: "
-        + ", ".join(
-            scenarios
-        )
+        + ", ".join(scenarios)
     )
 
     print(
-        f"Common ΔSCL scale "
-        f"({scale_description}): "
-        f"{-limit:.3f}% to "
-        f"{limit:.3f}%"
+        f"Common ΔSCL scale: "
+        f"{-limit:.3f}% to {limit:.3f}%"
     )
 
-    for scenario in (
-        scenarios
-    ):
-
+    for scenario in scenarios:
         render_scenario(
-            model=model,
-            scenario=scenario,
+            scenario,
             limit=limit,
-            show=show,
+            width_in=width_in,
             show_values=show_values,
+            save_svg=save_svg,
+            show=show,
         )
 
 
-def render_one(
-    scenario: str,
-    show: bool,
-    show_values: bool,
-    limit: float | None,
-) -> None:
+# =====================================================================
+# CLI
+# =====================================================================
 
-    model = parse_axd(
-        AXD_FILE
-    )
-
-    if limit is None:
-
-        scenarios = (
-            available_scenarios()
-        )
-
-        limit = common_scale(
-            scenarios,
-            percentile=(
-                GLOBAL_SCALE_PERCENTILE
-            ),
-        )
-
-    render_scenario(
-        model=model,
-        scenario=scenario,
-        limit=limit,
-        show=show,
-        show_values=show_values,
-    )
-
-
-def main(
-) -> None:
-
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Plot bus-level ΔSCL on the "
-            "PowerWorld Glover-37 one-line diagram."
+            "Generate publication-oriented Glover-37 "
+            "one-line-diagram figures."
         )
     )
 
-    group = (
-        parser
-        .add_mutually_exclusive_group(
-            required=True
-        )
+    group = parser.add_mutually_exclusive_group(
+        required=True
+    )
+
+    group.add_argument(
+        "--overview",
+        action="store_true",
+        help=(
+            "Render the benchmark topology with "
+            "A1/A2, A3, B1, B2, B3 and C tags."
+        ),
     )
 
     group.add_argument(
         "--scenario",
         choices=SCENARIO_ORDER,
-        help=(
-            "Plot one analyzed scenario."
-        ),
+        help="Render one static ΔSCL scenario.",
     )
 
     group.add_argument(
         "--all",
         action="store_true",
         help=(
-            "Plot every currently available "
-            "scenario using one common scale."
+            "Render all available static ΔSCL "
+            "scenarios using one common scale."
+        ),
+    )
+
+    parser.add_argument(
+        "--width",
+        type=float,
+        default=None,
+        help=(
+            "Output width in inches. Defaults to "
+            "3.49 in for --overview and 7.14 in "
+            "for scenario-result figures."
         ),
     )
 
@@ -1196,8 +1099,8 @@ def main(
         type=float,
         default=None,
         help=(
-            "Override the symmetric color "
-            "limit for a single scenario."
+            "Symmetric ΔSCL color limit for "
+            "--scenario only."
         ),
     )
 
@@ -1205,52 +1108,81 @@ def main(
         "--no-values",
         action="store_true",
         help=(
-            "Show bus numbers without "
-            "numerical ΔSCL labels."
+            "For scenario maps, omit numerical "
+            "ΔSCL values from bus labels."
+        ),
+    )
+
+    parser.add_argument(
+        "--svg",
+        action="store_true",
+        help=(
+            "Also save an SVG copy. PDF is always written "
+            "and is the publication-format output."
         ),
     )
 
     parser.add_argument(
         "--show",
         action="store_true",
-        help=(
-            "Open matplotlib windows in "
-            "addition to saving SVG figures."
-        ),
+        help="Open the matplotlib window.",
     )
 
-    args = (
-        parser.parse_args()
-    )
+    return parser
 
-    show_values = (
-        not args.no_values
-    )
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+
+    if args.overview:
+        if args.limit is not None:
+            raise ValueError(
+                "--limit is not applicable to --overview."
+            )
+
+        render_overview(
+            width_in=(
+                args.width
+                if args.width is not None
+                else IEEE_COLUMN_WIDTH_IN
+            ),
+            save_svg=args.svg,
+            show=args.show,
+        )
+
+        return
 
     if args.all:
-
-        if (
-            args.limit
-            is not None
-        ):
+        if args.limit is not None:
             raise ValueError(
-                "--limit can only be "
-                "used with --scenario."
+                "--limit can only be used with --scenario."
             )
 
         render_all(
+            width_in=(
+                args.width
+                if args.width is not None
+                else IEEE_TEXT_WIDTH_IN
+            ),
+            show_values=not args.no_values,
+            save_svg=args.svg,
             show=args.show,
-            show_values=show_values,
         )
 
-    else:
+        return
 
-        render_one(
-            scenario=args.scenario,
-            show=args.show,
-            show_values=show_values,
-            limit=args.limit,
-        )
+    render_scenario(
+        args.scenario,
+        limit=args.limit,
+        width_in=(
+            args.width
+            if args.width is not None
+            else IEEE_TEXT_WIDTH_IN
+        ),
+        show_values=not args.no_values,
+        save_svg=args.svg,
+        show=args.show,
+    )
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ from .scenarios import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-RESULTS_ROOT = ROOT / "results" / "glover37" / "static"
+RAW_ROOT = ROOT / "results" / "glover37" / "static" / "raw"
 
 S_BASE_MVA = 100.0
 
@@ -367,7 +367,7 @@ def save_metadata(
     metadata: dict,
 ) -> None:
     output_dir = (
-        RESULTS_ROOT
+        RAW_ROOT
         / scenario_name
     )
 
@@ -402,7 +402,7 @@ def save_case(
     metadata: dict,
 ) -> None:
     output_dir = (
-        RESULTS_ROOT
+        RAW_ROOT
         / scenario_name
     )
 

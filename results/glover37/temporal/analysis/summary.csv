@@ -1,0 +1,2 @@
+n_buses,n_hours,n_commitment_states,n_commitment_transitions,n_distinct_intact_minimum_hours,buses_with_rank_changes,bus_pairs_with_ordering_reversals,buses_with_changed_minimum_state_under_contingency
+37,168,4,12,3,31,71,23
