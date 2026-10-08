@@ -1,22 +1,14 @@
-#!/usr/bin/env python3
 """
-Plot conference-paper temporal results for the Glover 37-bus experiment.
+Plot the temporal-spatial results for the Glover 37-bus experiment.
 
-This module is presentation-only. It reads retained outputs produced by
-``analyze_temporal.py`` plus the run-level contingency time series.
+The script produces:
+1. a system-wide heatmap of intact SCL variation relative to the independent
+   temporal reference state; and
+2. a two-panel local-example figure showing selected intact bus trajectories
+   and the state-dependent effect of the fixed line 39--47 contingency.
 
-Figures
--------
-1. System-wide intact heatmap:
-   each bus's SCL deviation from the independent temporal reference state
-   (load_scale = 1.0 under the same deterministic dispatch rule).
-
-2. Two-panel local-example figure:
-   (a) intact SCL trajectories at buses 5, 13, and 34;
-   (b) intact and line-39--47-contingency SCL trajectories at bus 44.
-
-Examples
---------
+Usage
+-----
 Generate both figures:
 
     python -m experiments.glover37.plot_temporal
@@ -29,11 +21,11 @@ Generate only the local examples:
 
     python -m experiments.glover37.plot_temporal --figure local
 
-Also save SVG copies:
+Also save SVG:
 
     python -m experiments.glover37.plot_temporal --svg
 
-Display figures interactively:
+Display interactively:
 
     python -m experiments.glover37.plot_temporal --show
 
@@ -45,8 +37,12 @@ results/glover37/temporal/analysis/contingency_effect.csv
 
 Outputs
 -------
-results/glover37/temporal/temporal_intact_heatmap.pdf
-results/glover37/temporal/temporal_local_examples.pdf
+figures/glover37/temporal_intact_heatmap.pdf
+figures/glover37/temporal_local_examples.pdf
+
+With --svg:
+figures/glover37/temporal_intact_heatmap.svg
+figures/glover37/temporal_local_examples.svg
 """
 
 from __future__ import annotations

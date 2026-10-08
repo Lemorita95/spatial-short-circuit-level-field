@@ -1,35 +1,46 @@
 """
-Plot a mechanism-oriented coupling figure for the structural scenarios.
+Plot the structural-mechanism coupling results for the Glover 37-bus study.
 
 The figure relates the magnitude of the driving-point impedance change,
-``|ΔZ_ii|``, to the magnitude of the simulated short-circuit-level change,
-``|ΔSCL_i|``, for scenarios A2, A3, B1, B2, and B3.
-
-Each scenario is shown with a distinct color on one common scatter plot.
+|ΔZ_ii|, to the magnitude of the simulated short-circuit-level change,
+|ΔSCL_i|, for scenarios A2, A3, B1, B2, and B3.
 
 Usage
 -----
-python experiments/glover37/plot_mechanism.py
-python experiments/glover37/plot_mechanism.py --single-column
-python experiments/glover37/plot_mechanism.py --linear-x
-python experiments/glover37/plot_mechanism.py --svg
-python experiments/glover37/plot_mechanism.py --show
+Generate the default figure:
 
-Options
--------
---single-column
-    Render at IEEE single-column width (3.49 in). Default is 7.14 in.
---linear-x
-    Use a linear x-axis. The default is logarithmic because |ΔZ_ii|
-    spans multiple orders of magnitude.
---svg
-    Also save an SVG copy. PDF is always generated.
---show
-    Display the figure interactively.
+    python -m experiments.glover37.plot_mechanism
 
-Output
+Use a linear x-axis:
+
+    python -m experiments.glover37.plot_mechanism --linear-x
+
+Render at IEEE single-column width:
+
+    python -m experiments.glover37.plot_mechanism --single-column
+
+Also save SVG:
+
+    python -m experiments.glover37.plot_mechanism --svg
+
+Display interactively:
+
+    python -m experiments.glover37.plot_mechanism --show
+
+Inputs
 ------
+results/glover37/mechanism/analysis/A2_general_coupling.csv
+results/glover37/mechanism/analysis/A3_general_coupling.csv
+results/glover37/mechanism/analysis/B1_general_coupling.csv
+results/glover37/mechanism/analysis/B2_general_coupling.csv
+results/glover37/mechanism/analysis/B3_general_coupling.csv
+
+Outputs
+-------
 figures/glover37/mechanism_coupling_vs_delta_scl.pdf
+
+With --svg:
+figures/glover37/mechanism_coupling_vs_delta_scl.svg
 """
 
 from __future__ import annotations

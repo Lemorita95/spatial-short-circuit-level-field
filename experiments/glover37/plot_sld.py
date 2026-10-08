@@ -1,26 +1,44 @@
 """
-Publication-oriented one-line-diagram plots for the Glover 37-bus study.
+Plot publication-oriented one-line diagrams for the Glover 37-bus study.
 
-This script deliberately keeps responsibilities separated:
+The script uses the PowerWorld display geometry to generate the benchmark
+overview and, optionally, spatial maps of the analyzed static ΔSCL results.
 
-* tools/axd_grid_viewer.py
-    Parses PowerWorld AXD display geometry, including DisplayBusField.
+Usage
+-----
+Generate the benchmark overview:
 
-* this file
-    Applies paper-specific styling, scenario highlighting, and ΔSCL data.
-
-Outputs are vector PDF by default; SVG is optional with --svg.
-
-Examples
---------
-Paper overview (IEEE single-column width):
     python -m experiments.glover37.plot_sld --overview
 
-One static ΔSCL scenario:
+Generate one static scenario map:
+
     python -m experiments.glover37.plot_sld --scenario A2
 
-All static ΔSCL scenarios:
+Generate all available static scenario maps:
+
     python -m experiments.glover37.plot_sld --all
+
+Also save SVG:
+
+    python -m experiments.glover37.plot_sld --overview --svg
+
+Inputs
+------
+cases/glover37.json
+data/powerworld/glover37/base/DesignCase2_2010.axd
+
+For scenario-result maps:
+results/glover37/static/analysis/<scenario>/delta_from_base.csv
+
+Outputs
+-------
+Overview:
+figures/glover37/benchmark_overview_tags.pdf
+
+Scenario maps:
+figures/glover37/<scenario>_delta_scl_sld.pdf
+
+With --svg, corresponding SVG files are also written.
 """
 
 from __future__ import annotations

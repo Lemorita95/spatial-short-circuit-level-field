@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-SUMMARY = ROOT / "results" / "glover37" / "mechanism" / "general_outage_coupling_summary.csv"
+SUMMARY = ROOT / "results" / "glover37" / "mechanism" / "analysis" / "general_outage_coupling_summary.csv"
 OUTPUT = ROOT / "IEEE-conference-template-062824" / "mechanism_table.tex"
 SCENARIO_ORDER = ["A2", "A3", "B1", "B2", "B3"]
 

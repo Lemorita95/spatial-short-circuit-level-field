@@ -1,3 +1,32 @@
+"""
+Define the Glover 37-bus static sensitivity scenarios.
+
+This module contains the fixed scenario definitions shared by the static
+experiment and related plotting/analysis scripts. It performs no simulation.
+
+Usage
+-----
+Imported by other experiment modules; it is not intended to be run directly.
+
+Inputs
+------
+cases/glover37.json
+
+Scenario definitions
+--------------------
+A1  Generator 28 dispatched to 0 MW while remaining connected.
+A2  Generator 28 disconnected.
+A3  Generator 14 disconnected.
+B1  Line 14-34 circuit 1 disconnected.
+B2  Line 21-48 circuit 1 disconnected.
+B3  Transformer 28-29 circuit 1 disconnected.
+
+Outputs
+-------
+No files are written.
+"""
+
+
 from dataclasses import dataclass
 from enum import Enum
 

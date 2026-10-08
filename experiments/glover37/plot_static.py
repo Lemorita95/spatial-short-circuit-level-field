@@ -1,32 +1,47 @@
 """
-Plot the static 37-bus ΔSCL response across scenarios A1--B3.
+Plot the bus-wise static short-circuit-level response for scenarios A1--B3.
 
-The script reads each scenario's ``delta_from_base.csv`` and produces one
-heatmap with buses in ascending order on the y-axis and scenarios on the
-x-axis.
+The script reads the analyzed static results and produces a heatmap of the
+percentage change in short-circuit level relative to the baseline, with buses
+on the y-axis and scenarios on the x-axis.
 
-Examples
---------
-python -m experiments.glover37.plot_static
-python -m experiments.glover37.plot_static --single-column
-python -m experiments.glover37.plot_static --scale symmetric
-python -m experiments.glover37.plot_static --svg
-python -m experiments.glover37.plot_static --show
+Usage
+-----
+Generate the default figure:
 
-Options
+    python -m experiments.glover37.plot_static
+
+Use a symmetric color scale:
+
+    python -m experiments.glover37.plot_static --scale symmetric
+
+Render at IEEE single-column width:
+
+    python -m experiments.glover37.plot_static --single-column
+
+Also save SVG:
+
+    python -m experiments.glover37.plot_static --svg
+
+Display interactively:
+
+    python -m experiments.glover37.plot_static --show
+
+Inputs
+------
+results/glover37/static/analysis/A1/delta_from_base.csv
+results/glover37/static/analysis/A2/delta_from_base.csv
+results/glover37/static/analysis/A3/delta_from_base.csv
+results/glover37/static/analysis/B1/delta_from_base.csv
+results/glover37/static/analysis/B2/delta_from_base.csv
+results/glover37/static/analysis/B3/delta_from_base.csv
+
+Outputs
 -------
---single-column
-    Render at IEEE single-column width (3.49 in). The default is 7.14 in.
---scale {minmax,symmetric}
-    ``minmax`` uses the observed ΔSCL range and a one-sided blue-to-white
-    map; ``symmetric`` uses a zero-centered diverging scale.
---svg
-    Also save an SVG copy. PDF is always generated.
---show
-    Display the figure interactively.
+figures/glover37/static_delta_scl_heatmap.pdf
 
-Both layouts write to ``figures/glover37/static_delta_scl_heatmap.pdf``;
-running one layout therefore replaces the previous version.
+With --svg:
+figures/glover37/static_delta_scl_heatmap.svg
 """
 
 from __future__ import annotations

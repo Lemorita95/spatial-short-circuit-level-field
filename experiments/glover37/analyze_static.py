@@ -1,3 +1,36 @@
+"""
+Analyze the Glover 37-bus static experiment relative to the baseline.
+
+The script reads completed static runs and computes the bus-wise changes in
+short-circuit current, short-circuit level, and pre-fault voltage relative
+to the validated baseline case.
+
+Usage
+-----
+Analyze all available scenarios:
+
+    python -m experiments.glover37.analyze_static --all
+
+Analyze one scenario:
+
+    python -m experiments.glover37.analyze_static --scenario A2
+
+Inputs
+------
+results/glover37/static/raw/base/results.csv
+results/glover37/static/raw/base/metadata.json
+results/glover37/static/raw/<scenario>/results.csv
+results/glover37/static/raw/<scenario>/metadata.json
+
+Outputs
+-------
+results/glover37/static/analysis/<scenario>/delta_from_base.csv
+
+The analyzed scenarios are:
+    A1, A2, A3, B1, B2, B3
+"""
+
+
 import argparse
 import json
 from pathlib import Path

@@ -1,3 +1,35 @@
+"""
+Run the Glover 37-bus static short-circuit-level experiment.
+
+The script solves the validated baseline and the predefined static scenarios
+A1--B3. For each case, it solves the pre-fault power flow and computes the
+bus-level short-circuit quantities.
+
+Usage
+-----
+Run all cases:
+
+    python -m experiments.glover37.run_static --all
+
+Run one case:
+
+    python -m experiments.glover37.run_static --scenario A2
+
+Inputs
+------
+cases/glover37.json
+experiments/glover37/scenarios.py
+
+Outputs
+-------
+results/glover37/static/raw/<scenario>/results.csv
+results/glover37/static/raw/<scenario>/metadata.json
+
+The available scenario names are:
+    base, A1, A2, A3, B1, B2, B3
+"""
+
+
 import argparse
 import cmath
 import csv

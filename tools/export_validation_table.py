@@ -18,9 +18,8 @@ SUMMARY = (
     ROOT
     / "results"
     / "glover37"
-    / "mechanism"
-    / "analysis"
-    / "general_outage_coupling_summary.csv"
+    / "validation"
+    / "summary.csv"
 )
 
 OUTPUT = (

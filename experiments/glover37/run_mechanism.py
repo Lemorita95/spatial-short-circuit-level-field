@@ -1,21 +1,35 @@
 """
-Run the 37-bus structural-mechanism experiment.
+Run the Glover 37-bus structural-mechanism experiment.
 
-This stage performs the numerical work only. For each structural scenario,
-it constructs the exact low-rank update of the short-circuit admittance
-matrix, computes the resulting driving-point-impedance prediction, and
-re-solves the modified network for comparison.
+For each structural scenario A2, A3, B1, B2, and B3, the script evaluates
+the exact low-rank admittance-matrix update, computes the corresponding
+driving-point-impedance prediction, and solves the modified network for
+comparison.
 
-Outputs are written under:
-    results/glover37/mechanism/raw/<scenario>/
+This stage performs the numerical experiment only. Error metrics and
+aggregate summaries are computed by analyze_mechanism.py.
 
-Use ``analyze_mechanism.py`` to compute comparison errors and the aggregate
-summary used by the paper.
+Usage
+-----
+Run all mechanism scenarios:
 
-Examples
---------
-python -m experiments.glover37.run_mechanism --all
-python -m experiments.glover37.run_mechanism --scenario A2
+    python -m experiments.glover37.run_mechanism --all
+
+Run one scenario:
+
+    python -m experiments.glover37.run_mechanism --scenario A2
+
+Inputs
+------
+cases/glover37.json
+
+Outputs
+-------
+results/glover37/mechanism/raw/<scenario>/results.csv
+results/glover37/mechanism/raw/<scenario>/metadata.json
+
+The mechanism scenarios are:
+    A2, A3, B1, B2, B3
 """
 
 from __future__ import annotations

@@ -1,42 +1,38 @@
 """
-37-bus temporal-spatial short-circuit-level experiment.
+Run the Glover 37-bus temporal-spatial short-circuit-level experiment.
 
-Run from the repository root, e.g.:
+The experiment uses the public 2025 SE3 hourly demand series as a temporal
+load-scaling signal for the benchmark network. It solves 168 successive
+hourly operating states for the intact network and for the fixed line 39--47
+contingency, together with one independent intact reference state at
+load_scale = 1.0.
+
+The SE3 data provide only the temporal scaling signal; the Glover 37-bus
+benchmark is not an electrical model of SE3.
+
+Usage
+-----
+Run the temporal experiment:
 
     python -m experiments.glover37.run_temporal \
         --se3-file data/se3_2025.csv \
         --timestamp-column timestamp \
         --load-column SE3
 
-Experiment design
------------------
-  • use the 2025 hourly SE3 demand series as a temporal scaling signal;
-  • select the continuous 168-hour window with maximum Pmax-Pmin;
-  • map the selected-week mean to the validated 37-bus baseline load;
-  • scale every benchmark load P and Q by the same hourly factor;
-  • use synchronous generators only in the temporal experiment;
-  • rank non-slack generators by descending MWMax and dispatch sequentially
-    within MWMin/MWMax;
-  • keep slack bus 31 connected to balance residual demand and losses;
-  • evaluate outage of line 39-47 circuit 1 at every hourly state;
-  • freeze intact commitment and non-slack dispatch before applying the
-    contingency;
-  • evaluate 168 intact and 168 contingency states;
-  • additionally solve one intact reference state at load_scale = 1.0 using
-    the same deterministic dispatch/commitment rule.
+Inputs
+------
+cases/glover37.json
+data/se3_2025.csv
+data/powerworld/glover37/base/generators.csv
 
-The reference state is not taken from the static experiment. It belongs to
-the temporal experiment and is used as the normalization reference for the
-temporal SCL field.
-
-Outputs (under results/glover37/temporal/raw/)
-----------------------------------------------
-  generator_priority.csv
-  dispatch_schedule.csv
-  run_summary.csv
-  scl_timeseries.csv
-  reference_scl.csv
-  metadata.json
+Outputs
+-------
+results/glover37/temporal/raw/generator_priority.csv
+results/glover37/temporal/raw/dispatch_schedule.csv
+results/glover37/temporal/raw/run_summary.csv
+results/glover37/temporal/raw/scl_timeseries.csv
+results/glover37/temporal/raw/reference_scl.csv
+results/glover37/temporal/raw/metadata.json
 """
 
 from __future__ import annotations
@@ -831,7 +827,6 @@ def main():
     parser.add_argument(
         "--se3-file",
         type=Path,
-        required=True,
         default='data/se3_2025.csv'
     )
 
