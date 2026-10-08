@@ -6,7 +6,6 @@ __pycache__
 *.pyc
 
 logs/
-figures/
 scl_timeseries_explorer.html
 IEEE-conference-template-062824/
 tasks.json
