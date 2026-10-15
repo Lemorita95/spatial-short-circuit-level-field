@@ -107,7 +107,7 @@ static-analysis:
 
 
 static-figures:
-	$(PYTHON) -m experiments.glover37.plot_static
+	$(PYTHON) -m experiments.glover37.plot_static --single-column
 	$(PYTHON) -m experiments.glover37.plot_sld --overview
 
 
