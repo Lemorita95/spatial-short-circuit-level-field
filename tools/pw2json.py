@@ -100,6 +100,15 @@ def convert(folder: Path) -> tuple[dict, str]:
         tap = pw_float(row["Tap"])
         if tap is None:
             tap = 1.0
+        tap_min = pw_float(row["TapMin"])
+        if tap_min is None:
+            tap_min = 0.9
+        tap_max = pw_float(row["TapMax"])
+        if tap_max is None:
+            tap_max = 1.1
+        tap_step = pw_float(row["TapStepSize"])
+        if tap_step is None:
+            tap_step = 0.01
 
         common = {
             "from_bus": fbus,
@@ -112,10 +121,13 @@ def convert(folder: Path) -> tuple[dict, str]:
             item = {
                 **common,
                 "name": f"Transformer {fbus}-{tbus} ckt {ckt}",
-                "m": tap,
+                "m0": tap,
+                "m_min": tap_min,
+                "m_max": tap_max,
+                "m_step": tap_step,
             }
             transformers.append(item)
-            active_taps.append((fbus, tbus, ckt, tap))
+            active_taps.append((fbus, tbus, ckt, tap, tap_min, tap_max, tap_step))
         else:
             item = {
                 **common,
@@ -344,8 +356,8 @@ def convert(folder: Path) -> tuple[dict, str]:
     )
     report.append("| From | To | Ckt | Tap m |\n")
     report.append("|---:|---:|:---:|---:|\n")
-    for fbus, tbus, ckt, tap in active_taps:
-        report.append(f"| {fbus} | {tbus} | {ckt} | {tap:.5f} |\n")
+    for fbus, tbus, ckt, tap, tap_min, tap_max, tap_step in active_taps:
+        report.append(f"| {fbus} | {tbus} | {ckt} | {tap:.5f} | {tap_min:.5f} | {tap_max:.5f} | {tap_step:.5f} |\n")
 
     report.append("\n## Switched shunts represented as fixed shunts\n\n")
     report.append(

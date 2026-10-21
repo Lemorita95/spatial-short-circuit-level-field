@@ -46,12 +46,13 @@ class PowerFlow():
 
         return P, Q
 
-    def newton_raphson(self, ThetaV0, PQVec, YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax, max_iter=100, tol=1e-4):
+    def newton_raphson(self, ThetaV0, PQVec, YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax, max_iter=100, tol=1e-4, verbose=False):
         '''
             Newton-Raphson method for solving nonlinear equations
             solve for dVTheta at a:  J . dVTheta = mismatch (P_target - P_calculated)
         '''
-        print('\t\tSolving Power Flow using Newton-Raphson method...')
+        if verbose:
+            print('\t\tSolving Power Flow using Newton-Raphson method...')
         convergence = False
         n_bus = YBus.shape[0]
         ThetaV = ThetaV0.copy()
@@ -123,7 +124,8 @@ class PowerFlow():
 
             exceeded = below_min | above_max
             if exceeded.any():
-                print(f'\t\t\t... generators at PV bus index {active_idx[exceeded]} exceeded Q limits, enforcing as PQ buses')
+                if verbose:
+                    print(f'\t\t\t... generators at PV bus index {active_idx[exceeded]} exceeded Q limits, enforcing as PQ buses')
                 # buses that exceed limits
                 exceed_rel = rel_idx[exceeded]          # relative indices in active PV
                 exceed_abs = active_idx[exceeded]       # absolute bus indices in ThetaV
@@ -146,7 +148,7 @@ class PowerFlow():
         
         return ThetaV[:len(ThetaV)//2], ThetaV[len(ThetaV)//2:]
     
-    def solve_power_flow(self, CustomNetwork):
+    def solve_power_flow(self, CustomNetwork, verbose=False):
         '''
             set up the network and the input data for problem solving
             - create the initial values vector (for theta and V) - power flow objective
@@ -220,7 +222,7 @@ class PowerFlow():
         PQ = np.concatenate((P, Q))
 
         # call NR solver, return ThetaV if converged or None otherwise
-        return self.newton_raphson(ThetaV0, PQ, CN.YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax, tol=1e-9)
+        return self.newton_raphson(ThetaV0, PQ, CN.YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax, tol=1e-9, verbose=verbose)
     
     def bus_flow(self, CustomNetwork, ThetaV):
         '''

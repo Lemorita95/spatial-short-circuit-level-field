@@ -90,7 +90,11 @@ class CustomNetwork():
                     bus_2 = equipment.get("to_bus"),
                     Z_series = float((equipment.get('z_series') or {}).get('R', 0)) + 1j* float((equipment.get('z_series') or {}).get('X', 0)),
                     Y_shunt = float((equipment.get('y_shunt') or {}).get('G', 0)) + 1j* float((equipment.get('y_shunt') or {}).get('B', 0)),
-                    m = float(equipment.get("m")) if equipment.get("m") is not None else 1.0,
+                    m0 = float(equipment.get("m0")) if equipment.get("m0") is not None else 1.0,
+                    m_min = float(equipment.get("m_min")) if equipment.get("m_min") is not None else 0.9,
+                    m_max = float(equipment.get("m_max")) if equipment.get("m_max") is not None else 1.1,
+                    m_step = float(equipment.get("m_step")) if equipment.get("m_step") is not None else 0.01,
+                    n0 = int(equipment.get("n0")) if equipment.get("n0") is not None else 0,
                     status = bool(equipment.get("status", True)),
                 )
 
