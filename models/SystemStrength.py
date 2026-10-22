@@ -201,8 +201,11 @@ class ESCR(_MetricHistory):
         working.generators[name] = probe
         probe.V = float(target_mag)
 
+        # Taps (and any other discrete controllers) stay frozen during the near-instant
+        # voltage step; the solve starts from the solved base state.
         pf = PowerFlow()
-        solved = pf.solve_power_flow(working)
+        v0 = np.asarray(v0, dtype=complex)
+        solved = pf.solve_power_flow(working, warm_start=(np.angle(v0), np.abs(v0)), controls=False)
         if solved is None:
             raise RuntimeError(f'Power flow failed for prescribed voltage step at bus {bus}')
         angles, magnitudes = solved

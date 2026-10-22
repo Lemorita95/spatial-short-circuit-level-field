@@ -1,7 +1,7 @@
 import numpy as np
 
 class ExternalGrid:
-    def __init__(self, name, bus_1, kV_nom, Z_SC_ohms, S_SC_MVA, I_SC_kamps, status):
+    def __init__(self, name, bus_1, kV_nom, *, Z_SC_ohms=None, S_SC_MVA=None, I_SC_kamps=None, status=True):
         '''
             information needed is the short circuit impedance and the current injection
             kV_nom: external grid nominal voltage in the connection point
@@ -25,7 +25,7 @@ class ExternalGrid:
         self.name = name
         self.bus_1 = bus_1
         self.kV_nom = kV_nom
-        self.status = True if status is None else status
+        self.status = status
         
         Z_b = (self.kV_nom**2)/100 # converter to the 100 MVA common base
 

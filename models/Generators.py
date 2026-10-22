@@ -2,7 +2,7 @@ import numpy as np
 import warnings
 
 class Generator:
-    def __init__(self, name, bus_1, Z_series, V, P, Q, Q_max, Q_min, status):
+    def __init__(self, name, bus_1, Z_series, P, *, V=None, Q=None, Q_max=None, Q_min=None, status=True):
         self.element_type = "generator"
         self.name = name
         self.bus_1 = bus_1

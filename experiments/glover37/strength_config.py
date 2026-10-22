@@ -104,19 +104,16 @@ def augment_network(net):
 
         z = site.transformer_z_pu
         # On corresponding voltage bases, nominal transformer tap ratio is 1 pu.
-        net.transformers[main] = Transformer(main, site.host_bus, site.main_mv_bus,
-                                              z, 0j, 1.0, True)
+        # No reg_bus: IBR transformer taps stay at n0 = 0 (m = m0 = 1.0) in this study.
+        net.transformers[main] = Transformer(main, site.host_bus, site.main_mv_bus, z)
         net.lines[feeder] = Line(feeder, site.main_mv_bus, site.padmount_hv_bus,
-                                 FEEDER_Z_SYSTEM_BASE, 1j * FEEDER_B_SYSTEM_BASE, True)
-        net.transformers[pad] = Transformer(pad, site.padmount_hv_bus,
-                                             site.converter_lv_bus, z, 0j, 1.0, True)
+                                 FEEDER_Z_SYSTEM_BASE, Y_shunt=1j * FEEDER_B_SYSTEM_BASE)
+        net.transformers[pad] = Transformer(pad, site.padmount_hv_bus, site.converter_lv_bus, z)
         # FullConverter P, Q are per unit; rating is kVA, nominal voltage is kV.
         net.full_converters[converter] = FullConverter(
             name=converter, bus_1=site.converter_lv_bus,
+            kVA_nominal=site.converter_mva * 1000.0, cos_phi=1.0, kV_nominal=LV_KV,
             P=site.operating_mw / SYSTEM_BASE_MVA, Q=0.0,
-            kVA_nominal=site.converter_mva * 1000.0,
-            cos_phi=1.0, kV_nominal=LV_KV,
-            K_scc=1.2, V_min=0.15, K_factor=3.0, status=True,
         )
 
     net.build_ybus()

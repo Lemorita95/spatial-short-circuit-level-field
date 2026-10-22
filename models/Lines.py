@@ -1,11 +1,11 @@
 class Line:
-    def __init__(self, name, bus_1, bus_2, Z_series, Y_shunt, status):
+    def __init__(self, name, bus_1, bus_2, Z_series, *, Y_shunt=0j, status=True):
         self.name = name
         self.bus_1 = bus_1
         self.bus_2 = bus_2
         self.Z_series = Z_series
         self.Y_shunt = Y_shunt
-        self.status = True if status is None else status
+        self.status = status
 
 
     def get_Y(self):

@@ -1,7 +1,7 @@
 from cmath import polar, rect
 
 class Load:
-    def __init__(self, name, bus_1, bus_2, P, Q, status):
+    def __init__(self, name, bus_1, *, bus_2=0, P=0.0, Q=0.0, status=True):
         '''
             just shunt loads for now, i.e. bus_2 = 0
             modeled as a constant power
@@ -12,7 +12,7 @@ class Load:
         self.bus_2 = bus_2
         self.P = P
         self.Q = Q
-        self.status = True if status is None else status
+        self.status = status
 
     def get_Y(self, V_pre_fault, S_pre_fault):
         '''

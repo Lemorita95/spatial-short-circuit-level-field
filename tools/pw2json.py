@@ -7,6 +7,13 @@ from typing import Optional
 S_BASE_MVA = 100.0
 TRANSFORMER_PHASE_SHIFT_DEG = 0.0
 
+# JSON key -> PowerWorld branch column, written only when the column has a value
+TRANSFORMER_TAP_COLUMNS = {"m0": "Tap", "m_min": "TapMin", "m_max": "TapMax", "m_step": "TapStepSize"}
+TRANSFORMER_BAND_COLUMNS = {"v_low": "RegMin", "v_high": "RegMax"}
+# PowerWorld per-transformer automatic control (YES/NO). Only YES is written ("auto": true);
+# NO or missing is omitted, so the TapController default (auto off, taps held) applies.
+TRANSFORMER_AUTO_COLUMN = "AutoControl"
+
 
 def read_pw_csv(path: Path) -> list[dict]:
     """Read a PowerWorld CSV export whose first line contains the object type."""
@@ -82,6 +89,9 @@ def convert(folder: Path) -> tuple[dict, str]:
     transformers = []
     omitted_open_branches = []
     active_taps = []
+    # (from, to, reg_bus, v_low, v_high, auto) -> transformer names; parallel circuits share one controller
+    tap_groups: dict[tuple, list[str]] = {}
+    missing_auto = []   # LTC transformers without a YES/NO automatic-control value
 
     for row in branches_csv:
         fbus = pw_int(row["BusNumFrom"])
@@ -97,18 +107,6 @@ def convert(folder: Path) -> tuple[dict, str]:
         X = pw_float(row["X"]) or 0.0
         G = pw_float(row["G"]) or 0.0
         B = pw_float(row["B"]) or 0.0
-        tap = pw_float(row["Tap"])
-        if tap is None:
-            tap = 1.0
-        tap_min = pw_float(row["TapMin"])
-        if tap_min is None:
-            tap_min = 0.9
-        tap_max = pw_float(row["TapMax"])
-        if tap_max is None:
-            tap_max = 1.1
-        tap_step = pw_float(row["TapStepSize"])
-        if tap_step is None:
-            tap_step = 0.01
 
         common = {
             "from_bus": fbus,
@@ -118,16 +116,42 @@ def convert(folder: Path) -> tuple[dict, str]:
         }
 
         if row["IsXF"].strip().upper() == "YES":
+            # Only fields present in the export are written; Transformer defines the defaults.
+            taps = {key: pw_float(row.get(col)) for key, col in TRANSFORMER_TAP_COLUMNS.items()}
+            taps = {key: value for key, value in taps.items() if value is not None}
+
+            # Voltage regulation only for an LTC with a regulated bus (PowerWorld RegBusNum 0 = none).
+            # It goes to the "tap_controllers" section; the transformer record keeps the tap grid only.
+            name = f"Transformer {fbus}-{tbus} ckt {ckt}"
+            control = (row.get("ControlType") or "").strip()
+            reg_bus = pw_int(row["RegBusNum"]) if (row.get("RegBusNum") or "").strip() else 0
+            regulation = {}
+            if control.upper() == "LTC" and reg_bus != 0:
+                regulation["reg_bus"] = reg_bus
+                for key, col in TRANSFORMER_BAND_COLUMNS.items():
+                    value = pw_float(row.get(col))
+                    if value is not None:
+                        regulation[key] = value
+                auto = (row.get(TRANSFORMER_AUTO_COLUMN) or "").strip().upper()
+                if auto == "YES":
+                    regulation["auto"] = True
+                elif auto != "NO":
+                    missing_auto.append(name)
+                key = (fbus, tbus, *(regulation.get(k) for k in ("reg_bus", "v_low", "v_high", "auto")))
+                tap_groups.setdefault(key, []).append(name)
+            elif control.upper() == "LTC":
+                warnings.append(
+                    f"Transformer {fbus}-{tbus} ckt {ckt}: ControlType LTC without a regulated bus "
+                    "(RegBusNum 0); exported without a tap controller, so its tap stays at m0."
+                )
+
             item = {
                 **common,
-                "name": f"Transformer {fbus}-{tbus} ckt {ckt}",
-                "m0": tap,
-                "m_min": tap_min,
-                "m_max": tap_max,
-                "m_step": tap_step,
+                "name": name,
+                **taps,
             }
             transformers.append(item)
-            active_taps.append((fbus, tbus, ckt, tap, tap_min, tap_max, tap_step))
+            active_taps.append((fbus, tbus, ckt, control or "-", {**taps, **regulation}))
         else:
             item = {
                 **common,
@@ -287,6 +311,24 @@ def convert(folder: Path) -> tuple[dict, str]:
             "B_pu_fixed_json": q_nom / S_BASE_MVA,
         })
 
+    # one tap controller per regulating transformer group; "auto": true only for AutoControl YES
+    if missing_auto:
+        warnings.append(
+            f"No YES/NO '{TRANSFORMER_AUTO_COLUMN}' value for {len(missing_auto)} LTC transformer(s) "
+            f"({', '.join(missing_auto)}); their tap controllers are written without auto, so taps are held "
+            "(TapController default). Add the field to the branch export if they should regulate."
+        )
+    tap_controllers = []
+    for (fbus, tbus, reg_bus, v_low, v_high, auto), names in tap_groups.items():
+        record = {"name": f"{fbus}-{tbus}", "elements": names, "reg_bus": reg_bus}
+        if v_low is not None:
+            record["v_low"] = v_low
+        if v_high is not None:
+            record["v_high"] = v_high
+        if auto:
+            record["auto"] = True
+        tap_controllers.append(record)
+
     case = {
         "buses": buses,
         "elements": {
@@ -298,6 +340,7 @@ def convert(folder: Path) -> tuple[dict, str]:
             "full_converters": [],
             "external_grids": [],
         },
+        "tap_controllers": tap_controllers,
     }
 
     # --------------------------------------------------------------- report
@@ -315,6 +358,13 @@ def convert(folder: Path) -> tuple[dict, str]:
         "The JSON contains the exported snapshot values. If PowerWorld controls move in another scenario, "
         "the resulting model states should be recorded when comparing results.\n"
     )
+
+    if warnings or notes:
+        report.append("\n## Conversion warnings and notes\n\n")
+        for message in warnings:
+            report.append(f"- **Warning:** {message}\n")
+        for message in notes:
+            report.append(f"- {message}\n")
 
     report.append("\n## Schema audit\n\n")
     report.append(
@@ -354,10 +404,17 @@ def convert(folder: Path) -> tuple[dict, str]:
         "These are the tap ratios contained in the exported snapshot. PowerWorld may move controllable taps "
         "when solving another operating condition.\n\n"
     )
-    report.append("| From | To | Ckt | Tap m |\n")
-    report.append("|---:|---:|:---:|---:|\n")
-    for fbus, tbus, ckt, tap, tap_min, tap_max, tap_step in active_taps:
-        report.append(f"| {fbus} | {tbus} | {ckt} | {tap:.5f} | {tap_min:.5f} | {tap_max:.5f} | {tap_step:.5f} |\n")
+    report.append("Blank cells were not in the export and use the `Transformer` class defaults.\n\n")
+    report.append("| From | To | Ckt | Control | Tap m | m min | m max | m step | Reg bus | V low | V high | Auto |\n")
+    report.append("|---:|---:|:---:|:---:|---:|---:|---:|---:|---:|---:|---:|:---:|\n")
+    fmt = lambda taps, key, spec: format(taps[key], spec) if key in taps else ""
+    for fbus, tbus, ckt, control, taps in active_taps:
+        report.append(
+            f"| {fbus} | {tbus} | {ckt} | {control} | {fmt(taps, 'm0', '.5f')} | {fmt(taps, 'm_min', '.5f')} | "
+            f"{fmt(taps, 'm_max', '.5f')} | {fmt(taps, 'm_step', '.5f')} | {fmt(taps, 'reg_bus', 'd')} | "
+            f"{fmt(taps, 'v_low', '.4f')} | {fmt(taps, 'v_high', '.4f')} | "
+            f"{('yes' if taps.get('auto') else 'no') if 'reg_bus' in taps else ''} |\n"
+        )
 
     report.append("\n## Switched shunts represented as fixed shunts\n\n")
     report.append(

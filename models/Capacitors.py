@@ -1,5 +1,5 @@
 class Capacitor:
-    def __init__(self, name, bus_1, bus_2, Z_series, Y_shunt, status):
+    def __init__(self, name, bus_1, *, bus_2=0, Z_series=0j, Y_shunt=0j, status=True):
         '''
             just shunt capacitor for now, i.e. bus_2 = 0
             modeled as a constant impedance
@@ -9,7 +9,7 @@ class Capacitor:
         self.bus_2 = bus_2
         self.Z_series = Z_series
         self.Y_shunt = Y_shunt
-        self.status = True if status is None else status
+        self.status = status
 
     def get_Y(self):
         rows = [self.bus_1]

@@ -46,114 +46,185 @@ class PowerFlow():
 
         return P, Q
 
-    def newton_raphson(self, ThetaV0, PQVec, YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax, max_iter=100, tol=1e-4, verbose=False):
+    def _newton_raphson_inner(self, ThetaV, PQVec, YBus, slack_idx, PV_active_idx, max_iter, tol):
         '''
-            Newton-Raphson method for solving nonlinear equations
-            solve for dVTheta at a:  J . dVTheta = mismatch (P_target - P_calculated)
+            plain Newton-Raphson for a fixed bus-type set: J . dThetaV = mismatch.
+            PV_active_idx: absolute indices of buses whose |V| is held (PV), their
+            voltages must already be set in ThetaV.
+            returns (ThetaV, converged, iterations); ThetaV is modified in place.
         '''
-        if verbose:
-            print('\t\tSolving Power Flow using Newton-Raphson method...')
-        convergence = False
         n_bus = YBus.shape[0]
-        ThetaV = ThetaV0.copy()
-        PV_active = np.ones(len(PV_idx), dtype=bool)  # active PV buses
-
-        # unknown indices
         theta_unknown = np.delete(np.arange(n_bus), slack_idx) # exclude slack
-        exclude = np.concatenate(([slack_idx], PV_idx))
-        V_unknown = np.delete(np.arange(n_bus), exclude) # exclude slack and PV
+        V_unknown = np.setdiff1d(theta_unknown, PV_active_idx) # exclude slack and PV
         unknown_indices = np.concatenate([theta_unknown, n_bus + V_unknown])
 
-        iteration = 0
-        while iteration <= max_iter:
-            iteration += 1
+        for iteration in range(1, max_iter + 1):
             P_calc, Q_calc = self.PQ(YBus, ThetaV)
-
             mismatch = PQVec[unknown_indices] - np.concatenate((P_calc, Q_calc))[unknown_indices]
 
             # convergence check
             if np.all(np.abs(mismatch) < tol):
-                # print(f"\t\t\t> converged in {iteration} iterations")
-                convergence = True
-                break
+                return ThetaV, True, iteration
 
-            # solve linear through LU decomposition
-            ''' 
-                similar to 
-                    new_x = x + np.linalg.inv(J) @ delta_y
-                or
-                    new_x = np.linalg.solve(J, delta_y) + x
-            '''
-            # remove slack bus
+            # solve linear through LU decomposition, slack and PV voltages removed
             J_full = build_jacobian(YBus, ThetaV)
             J_reduced = J_full[np.ix_(unknown_indices, unknown_indices)]
-
-            # convert to sparse matrix for solving
             dThetaV = splu(csc_matrix(J_reduced)).solve(mismatch)
             ThetaV[unknown_indices] += dThetaV
 
-            # reset PV voltages
-            if PV_active.any():
-                ThetaV[n_bus + PV_idx[PV_active]] = ThetaV0[n_bus + PV_idx[PV_active]]
-            else:
-                continue
+        return ThetaV, False, max_iter
 
-            '''
-                make PV-PQ change a little better: to accept an arbitrary number of generators
-                with limits. today: all or none must have limits
-            '''
+    def newton_raphson(self, ThetaV0, PQVec, YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax,
+                       max_iter=100, tol=1e-4, verbose=False, pv_state0=None, Vset=None,
+                       max_outer=20, q_tol=1e-6, v_tol=1e-6, max_releases=2):
+        '''
+            Newton-Raphson power flow with generator reactive-power limits.
 
-            # PV bus Q range control
-            if (Qmin is None) and (Qmax is None):
-                continue
+            Q limits are enforced in an outer loop, only on converged solutions
+            (never on intermediate NR iterates):
+              - PV bus with Q_g > Qmax -> PQ at Qmax (state +1)
+              - PV bus with Q_g < Qmin -> PQ at Qmin (state -1)
+              - PQ bus at Qmax with |V| > Vset, or at Qmin with |V| < Vset -> back to PV
+            Each outer pass warm-starts from the previous solution. A generator released
+            back to PV more than `max_releases` times stays at its limit (anti-cycling).
 
-            # active PV bus indices
-            active_idx = PV_idx[PV_active]  # absolute bus indices
+            ThetaV0 holds the initial guess; Vset (aligned with PV_idx) holds the PV voltage
+            setpoints, defaulting to |V| of ThetaV0 at PV buses.
+            Qmin/Qmax are aligned with PV_idx (use -inf/inf for no limit).
+            pv_state0: optional initial state per PV bus (0 PV, +1 at Qmax, -1 at Qmin).
+            The final state is stored in self.pv_state (dict bus index -> state).
+        '''
+        if verbose:
+            print('\t\tSolving Power Flow using Newton-Raphson method...')
+        n_bus = YBus.shape[0]
+        ThetaV = ThetaV0.copy()
+        PQVec = PQVec.copy()
+        PV_idx = np.asarray(PV_idx, dtype=int)
+        n_pv = len(PV_idx)
+        Vset = ThetaV0[n_bus + PV_idx].copy() if Vset is None else np.asarray(Vset, dtype=float)
+        Qmin = np.full(n_pv, -np.inf) if Qmin is None else np.asarray(Qmin, dtype=float)
+        Qmax = np.full(n_pv, np.inf) if Qmax is None else np.asarray(Qmax, dtype=float)
+        state = np.zeros(n_pv, dtype=int) if pv_state0 is None else np.asarray(pv_state0, dtype=int).copy()
+        releases = np.zeros(n_pv, dtype=int)
+        self.pv_state = {}
+        self.outer_iterations = 0
 
-            # compute Q at buses (net injection)
-            Q_calc = self.PQ(YBus, ThetaV)[1]
+        for outer in range(1, max_outer + 1):
+            self.outer_iterations = outer
+            pv = state == 0
+            ThetaV[n_bus + PV_idx[pv]] = Vset[pv]
+            at_max, at_min = state == 1, state == -1
+            PQVec[n_bus + PV_idx[at_max]] = Qmax[at_max] - Q_load[PV_idx[at_max]]
+            PQVec[n_bus + PV_idx[at_min]] = Qmin[at_min] - Q_load[PV_idx[at_min]]
 
-            # find Q_g at active PV buses (net injection + load)
-            Q_g = Q_calc[active_idx] + Q_load[active_idx] # generator Q at PV buses
+            ThetaV, converged, _ = self._newton_raphson_inner(
+                ThetaV, PQVec, YBus, slack_idx, PV_idx[pv], max_iter, tol)
+            if not converged:
+                print(f'\t\t\t> power flow did not converged in {max_iter} iterations')
+                return None
+            if n_pv == 0:
+                break
 
-            # relative indices inside active PV mask
-            rel_idx = np.arange(len(active_idx))
+            # generator Q at PV buses (net injection + load)
+            Q_g = self.PQ(YBus, ThetaV)[1][PV_idx] + Q_load[PV_idx]
+            V = ThetaV[n_bus + PV_idx]
 
-            below_min = Q_g < Qmin[PV_active]  # mask relative to active PV
-            above_max = Q_g > Qmax[PV_active]
+            new_state = state.copy()
+            new_state[pv & (Q_g > Qmax + q_tol)] = 1
+            new_state[pv & (Q_g < Qmin - q_tol)] = -1
+            release = ((at_max & (V > Vset + v_tol)) | (at_min & (V < Vset - v_tol))) & (releases < max_releases)
+            new_state[release] = 0
+            releases[release] += 1
 
-            exceeded = below_min | above_max
-            if exceeded.any():
-                if verbose:
-                    print(f'\t\t\t... generators at PV bus index {active_idx[exceeded]} exceeded Q limits, enforcing as PQ buses')
-                # buses that exceed limits
-                exceed_rel = rel_idx[exceeded]          # relative indices in active PV
-                exceed_abs = active_idx[exceeded]       # absolute bus indices in ThetaV
-
-                # enforce reactive power limits
-                PQVec[n_bus + exceed_abs[below_min[exceeded]]] = Qmin[PV_active][exceed_rel[below_min[exceeded]]] - Q_load[exceed_abs[below_min[exceeded]]]
-                PQVec[n_bus + exceed_abs[above_max[exceeded]]] = Qmax[PV_active][exceed_rel[above_max[exceeded]]] - Q_load[exceed_abs[above_max[exceeded]]]
-
-                # mark these buses as now PQ
-                PV_active[PV_active] = ~exceeded
-
-                # update unknown_indices for voltages
-                V_unknown = np.delete(np.arange(n_bus), slack_idx)
-                V_unknown = np.setdiff1d(V_unknown, PV_idx[PV_active])
-                unknown_indices = np.concatenate([theta_unknown, n_bus + V_unknown])
-
-        if not convergence:
-            print(f'\t\t\t> power flow did not converged in {max_iter} iterations')
+            if np.array_equal(new_state, state):
+                break
+            if verbose:
+                changed = PV_idx[new_state != state]
+                print(f'\t\t\t... PV/PQ change at bus index {changed}: {state[new_state != state]} -> {new_state[new_state != state]}')
+            state = new_state
+        else:
+            print(f'\t\t\t> Q-limit loop did not settle in {max_outer} passes')
             return None
-        
+
+        self.pv_state = dict(zip(PV_idx.tolist(), state.tolist()))
         return ThetaV[:len(ThetaV)//2], ThetaV[len(ThetaV)//2:]
     
-    def solve_power_flow(self, CustomNetwork, verbose=False):
+    def solve_power_flow(self, CustomNetwork, verbose=False, warm_start=None, pv_state=None,
+                         controls=True, max_control_passes=30, max_reversals=2):
+        '''
+            power flow with generator Q limits and discrete voltage controllers.
+
+            1. solve with Q limits (newton_raphson outer loop), controlled devices fixed
+            2. ask every auto controller (CustomNetwork.controllers(), e.g. tap changers)
+               for a step at its regulated bus; apply all steps at once
+            3. rebuild YBus and re-solve, warm-started from the previous voltages and
+               generator states; repeat until no controller acts
+
+            Defaults:
+                controls = True           False keeps every controlled device where it is
+                                          (e.g. the ESCR voltage-step probe)
+                max_control_passes = 30   controller passes before giving up (warning, last
+                                          solution returned)
+                max_reversals = 2         a controller whose step direction reverses this many
+                                          times is frozen where it is (anti-hunting)
+
+            Controlled devices keep their final positions in CustomNetwork (e.g. transformer
+            taps), so a later YBus or short-circuit calculation uses them.
+
+            Records: self.pv_state, self.control_passes, self.control_steps
+            (controller name -> net steps), self.frozen_controllers.
+            Returns (theta, V), or None if a solve does not converge.
+        '''
+        CN = CustomNetwork
+        self.control_passes = 0
+        self.control_steps = {}
+        self.frozen_controllers = []
+        result = self._solve_fixed_controls(CN, verbose, warm_start, pv_state)
+        if result is None or not controls:
+            return result
+
+        controllers = [c for c in CN.controllers() if c.auto]
+        for c in controllers:
+            c.frozen = False
+        last_step = {}
+        reversals = {}
+        for control_pass in range(1, max_control_passes + 1):
+            V = result[1]
+            # buses whose voltage is already held: slack and generators in PV mode
+            held = {CN.slack_id} | {bus for bus, state in self.pv_state.items() if state == 0}
+            moved = False
+            for c in controllers:
+                step = c.action(V[CN.idx[c.reg_bus]], held)
+                if not step:
+                    continue
+                if last_step.get(c.name) == -step:
+                    reversals[c.name] = reversals.get(c.name, 0) + 1
+                    if reversals[c.name] >= max_reversals:
+                        c.frozen = True
+                        self.frozen_controllers.append(c.name)
+                        continue
+                c.apply(step)
+                last_step[c.name] = step
+                self.control_steps[c.name] = self.control_steps.get(c.name, 0) + step
+                moved = True
+            if not moved:
+                break
+            self.control_passes = control_pass
+            CN.build_ybus()
+            result = self._solve_fixed_controls(CN, verbose, warm_start=result, pv_state=self.pv_state)
+            if result is None:
+                return None
+        else:
+            print(f'\t\t\t> voltage controllers did not settle in {max_control_passes} passes')
+        return result
+
+    def _solve_fixed_controls(self, CustomNetwork, verbose=False, warm_start=None, pv_state=None):
         '''
             set up the network and the input data for problem solving
             - create the initial values vector (for theta and V) - power flow objective
             - create the target P and Q values vector (`true values`)
-            - solve using newton-raphson
+            - solve using newton-raphson, with generator Q limits
+            controlled devices (e.g. taps) stay at their current positions
         '''
         # i might not need the folowing line, just use the CustomNetwork passed as argument
         CN = CustomNetwork # an instance of a built network with passive YBus calculated
@@ -190,6 +261,8 @@ class PowerFlow():
         Q_load = np.zeros(num_bus)
 
         for load in CN.loads.values():
+            if not load.status:
+                continue
             bus_n = load.bus_1
             Q_load[bus_idx[bus_n]] += load.Q
 
@@ -198,16 +271,9 @@ class PowerFlow():
             
             P[PV_idx] = np.array([CN.buses[n].P for n in PV_id])
 
-            # Q limits
-            Qmin = np.array([CN.buses[n].Qg_min for n in PV_id])
-            Qmax = np.array([CN.buses[n].Qg_max for n in PV_id])
-
-            # handle Q limits None
-            mask_min = Qmin != None
-            mask_max = Qmax != None
-
-            Qmin = Qmin[mask_min] if np.any(mask_min) else None
-            Qmax = Qmax[mask_max] if np.any(mask_max) else None
+            # Q limits, aligned with PV_idx; a missing limit is unbounded
+            Qmin = np.array([-np.inf if CN.buses[n].Qg_min is None else CN.buses[n].Qg_min for n in PV_id], dtype=float)
+            Qmax = np.array([np.inf if CN.buses[n].Qg_max is None else CN.buses[n].Qg_max for n in PV_id], dtype=float)
 
         else:
             Qmin = Qmax = None
@@ -217,12 +283,34 @@ class PowerFlow():
             P[PQ_idx] = np.array([CN.buses[n].P for n in PQ_id])
             Q[PQ_idx] = np.array([CN.buses[n].Q for n in PQ_id])
             
+        # PV voltage setpoints (before any warm start overwrites the initial guess)
+        Vset = V0[PV_idx].copy()
+
+        # optional warm start from a previous solution (theta, V), indexed like CN.idx
+        if warm_start is not None:
+            theta_ws, v_ws = (np.asarray(x, dtype=float) for x in warm_start)
+            if theta_ws.shape != (num_bus,) or v_ws.shape != (num_bus,):
+                raise ValueError('warm_start must be (theta, V) arrays for every bus')
+            Theta0, V0 = theta_ws.copy(), v_ws.copy()
+            Theta0[slack_idx] = slack_angle
+            V0[slack_idx] = CN.buses[CN.slack_id].V
+
+        # optional initial PV/PQ state per PV bus id (0 PV, +1 at Qmax, -1 at Qmin)
+        pv_state0 = None
+        if pv_state is not None:
+            pv_state0 = [int(pv_state.get(n, 0)) for n in PV_id]
+
         # unify vectors
         ThetaV0 = np.concatenate((Theta0, V0))
         PQ = np.concatenate((P, Q))
 
         # call NR solver, return ThetaV if converged or None otherwise
-        return self.newton_raphson(ThetaV0, PQ, CN.YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax, tol=1e-9, verbose=verbose)
+        result = self.newton_raphson(ThetaV0, PQ, CN.YBus, slack_idx, PV_idx, Q_load, Qmin, Qmax,
+                                     tol=1e-9, verbose=verbose, pv_state0=pv_state0, Vset=Vset)
+        # final generator state per bus id: 0 PV, +1 at Qmax, -1 at Qmin
+        idx_to_bus = {i: n for n, i in bus_idx.items()}
+        self.pv_state = {idx_to_bus[i]: s for i, s in self.pv_state.items()}
+        return result
     
     def bus_flow(self, CustomNetwork, ThetaV):
         '''

@@ -10,10 +10,147 @@ from .Generators import Generator
 from .Loads import Load
 from .FullConverter import FullConverter
 from .ExternalGrid import ExternalGrid
+from .Controls import TapController
 
 def duplicates_error(key, element_dict):
     if key in element_dict:
         raise ValueError(f"duplicated name for '{key}'")
+
+
+# ---- JSON value converters ---------------------------------------------------
+def as_is(value):
+    return value
+
+
+def rx(value):
+    ''' {"R": r, "X": x} -> r + jx (missing part = 0) '''
+    return float(value.get("R", 0)) + 1j * float(value.get("X", 0))
+
+
+def gb(value):
+    ''' {"G": g, "B": b} -> g + jb (missing part = 0) '''
+    return float(value.get("G", 0)) + 1j * float(value.get("B", 0))
+
+
+def source_z(value):
+    ''' generator series impedance; an infinite part marks an ideal source '''
+    r, x = float(value["R"]), float(value["X"])
+    return float("inf") if float("inf") in (r, x) else r + 1j * x
+
+
+def rx_or_none(value):
+    ''' external-grid ohmic impedance, only if both R and X are given '''
+    if value.get("R") is None or value.get("X") is None:
+        return None
+    return float(value["R"]) + 1j * float(value["X"])
+
+
+'''
+    JSON schema of every element group:
+        json group -> (class, name prefix, {json key: (constructor argument, converter)})
+    Only keys present (not None) in the JSON are passed on, so every default lives
+    in the element class constructor only. A missing required argument raises in
+    the constructor. To support a new field: add one row here and one keyword in
+    the class.
+'''
+ELEMENT_SCHEMA = {
+    "lines": (Line, "line", {
+        "from_bus": ("bus_1", as_is),
+        "to_bus": ("bus_2", as_is),
+        "z_series": ("Z_series", rx),
+        "y_shunt": ("Y_shunt", gb),
+        "status": ("status", bool),
+    }),
+    "capacitors": (Capacitor, "capacitor", {
+        "from_bus": ("bus_1", as_is),
+        "to_bus": ("bus_2", as_is),
+        "z_series": ("Z_series", rx),
+        "y_shunt": ("Y_shunt", gb),
+        "status": ("status", bool),
+    }),
+    "transformers": (Transformer, "transformer", {
+        "from_bus": ("bus_1", as_is),
+        "to_bus": ("bus_2", as_is),
+        "z_series": ("Z_series", rx),
+        "y_shunt": ("Y_shunt", gb),
+        "m0": ("m0", float),
+        "m_min": ("m_min", float),
+        "m_max": ("m_max", float),
+        "m_step": ("m_step", float),
+        "n0": ("n0", int),
+        "status": ("status", bool),
+    }),
+    "generators": (Generator, "generator", {
+        "from_bus": ("bus_1", as_is),
+        "z_series": ("Z_series", source_z),
+        "V": ("V", float),
+        "P": ("P", float),
+        "Q": ("Q", float),
+        "Qg_max": ("Q_max", float),
+        "Qg_min": ("Q_min", float),
+        "status": ("status", bool),
+    }),
+    "loads": (Load, "load", {
+        "from_bus": ("bus_1", as_is),
+        "to_bus": ("bus_2", as_is),
+        "P": ("P", float),
+        "Q": ("Q", float),
+        "status": ("status", bool),
+    }),
+    "full_converters": (FullConverter, "full_converter", {
+        "from_bus": ("bus_1", as_is),
+        "P": ("P", float),
+        "Q": ("Q", float),
+        "kVA_nominal": ("kVA_nominal", float),
+        "cos_phi": ("cos_phi", float),
+        "kV_nominal": ("kV_nominal", float),
+        "K_scc": ("K_scc", float),
+        "V_min": ("V_min", float),
+        "K_factor": ("K_factor", float),
+        "status": ("status", bool),
+    }),
+    "external_grids": (ExternalGrid, "external_grid", {
+        "from_bus": ("bus_1", as_is),
+        "kV_nom": ("kV_nom", float),
+        "Z_SC_ohms": ("Z_SC_ohms", rx_or_none),
+        "S_SC_MVA": ("S_SC_MVA", float),
+        "I_SC_kamps": ("I_SC_kamps", float),
+        "status": ("status", bool),
+    }),
+}
+
+BUS_SCHEMA = {
+    "name": ("name", as_is),
+    "bus_type": ("bus_type", as_is),
+    "V": ("V", float),
+    "angle": ("angle", float),
+}
+
+
+'''
+    JSON schema of every controller group:
+        json group -> (class, name prefix, controlled element group, {json key: (constructor argument, converter)})
+    Each record needs "name" and "elements" (JSON names of the controlled elements,
+    e.g. parallel transformers); every other key is optional and the controller
+    class holds the defaults. Controllers are discrete outer-loop devices of the
+    power flow. To add one (e.g. switched shunts): one row here and one class in Controls.
+'''
+CONTROLLER_SCHEMA = {
+    "tap_controllers": (TapController, "tap_controller", "transformers", {
+        "reg_bus": ("reg_bus", as_is),
+        "v_low": ("v_low", float),
+        "v_high": ("v_high", float),
+        "auto": ("auto", bool),
+    }),
+}
+
+
+def schema_kwargs(record, fields):
+    ''' constructor keyword arguments for the fields present in a JSON record '''
+    return {arg: convert(record[key])
+            for key, (arg, convert) in fields.items()
+            if record.get(key) is not None}
+
 
 class CustomNetwork():
     """
@@ -26,150 +163,78 @@ class CustomNetwork():
         with open(self.file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-            self.buses = {}
-            self.slack_id = None
+        self.buses = {}
+        self.slack_id = None
+        # element full name -> constructor arguments not given in the JSON (class defaults used)
+        self.defaulted = {}
 
-            # buses
-            for bus in data.get("buses", []):
+        # buses
+        for bus in data.get("buses", []):
 
-                # only record slack id, PV and PQ buses will be inferred on the fly
-                if bus.get('bus_type', "").lower() == "slack":
-                    if self.slack_id is not None:
-                        raise ValueError("Multiple slack buses defined.")
-                    self.slack_id = bus["id"]
+            # only record slack id, PV and PQ buses will be inferred on the fly
+            if (bus.get('bus_type') or "").lower() == "slack":
+                if self.slack_id is not None:
+                    raise ValueError("Multiple slack buses defined.")
+                self.slack_id = bus["id"]
 
-                duplicates_error(bus.get("id"), self.buses)
+            duplicates_error(bus.get("id"), self.buses)
+            self.buses[bus["id"]] = Bus(bus["id"], **schema_kwargs(bus, BUS_SCHEMA))
 
-                self.buses[bus.get("id")] = Bus(
-                        id = bus.get("id"),
-                        name = bus.get("name"),
-                        bus_type = bus.get("bus_type"),
-                        V = float(bus.get("V")) if bus.get("V") is not None else None,
-                        angle = float(bus.get("angle")) if bus.get("angle") is not None else None
-                        )
-            
-            # all elements
-            elements = data.get("elements", {})
+        # all elements: one attribute per group, e.g. self.lines, self.generators
+        elements = data.get("elements", {})
+        for group, (element_class, prefix, fields) in ELEMENT_SCHEMA.items():
+            store = {}
+            setattr(self, group, store)
+            for equipment in elements.get(group, []):
+                name = f'{prefix}.{equipment["name"].lower()}'
+                duplicates_error(name, store)
+                kwargs = schema_kwargs(equipment, fields)
+                store[name] = element_class(name=name, **kwargs)
+                self.defaulted[name] = sorted(arg for arg, _ in fields.values() if arg not in kwargs)
 
-            # LINE element
-            self.lines = {}
-            for equipment in elements.get('lines', []):
-                name = f'line.{equipment.get("name").lower()}'
-                duplicates_error(name, self.lines)
-                self.lines[name] = Line(
-                    name = name,
-                    bus_1 = equipment.get("from_bus"),
-                    bus_2 = equipment.get("to_bus"),
-                    Z_series = float((equipment.get('z_series') or {}).get('R', 0)) + 1j* float((equipment.get('z_series') or {}).get('X', 0)),
-                    Y_shunt = float((equipment.get('y_shunt') or {}).get('G', 0)) + 1j* float((equipment.get('y_shunt') or {}).get('B', 0)),
-                    status = bool(equipment.get("status", True)),
-                )
-            
-            # CAPACITOR element
-            self.capacitors = {}
-            for equipment in elements.get('capacitors', []):
-                name = f'capacitor.{equipment.get("name").lower()}'
-                duplicates_error(name, self.capacitors)
-                self.capacitors[name] = Capacitor(
-                    name = name,
-                    bus_1 = equipment.get("from_bus"),
-                    bus_2 = equipment.get("to_bus", 0), # default value for shunt
-                    Z_series = float((equipment.get('z_series') or {}).get('R', 0)) + 1j* float((equipment.get('z_series') or {}).get('X', 0)),
-                    Y_shunt = float((equipment.get('y_shunt') or {}).get('G', 0)) + 1j* float((equipment.get('y_shunt') or {}).get('B', 0)),
-                    status = bool(equipment.get("status", True)),
-                )
-            
-            # TRANSFORMER element
-            self.transformers = {}
-            for equipment in elements.get('transformers', []):
-                name = f'transformer.{equipment.get("name").lower()}'
-                duplicates_error(name, self.transformers)
-                self.transformers[name] = Transformer(
-                    name = name,
-                    bus_1 = equipment.get("from_bus"),
-                    bus_2 = equipment.get("to_bus"),
-                    Z_series = float((equipment.get('z_series') or {}).get('R', 0)) + 1j* float((equipment.get('z_series') or {}).get('X', 0)),
-                    Y_shunt = float((equipment.get('y_shunt') or {}).get('G', 0)) + 1j* float((equipment.get('y_shunt') or {}).get('B', 0)),
-                    m0 = float(equipment.get("m0")) if equipment.get("m0") is not None else 1.0,
-                    m_min = float(equipment.get("m_min")) if equipment.get("m_min") is not None else 0.9,
-                    m_max = float(equipment.get("m_max")) if equipment.get("m_max") is not None else 1.1,
-                    m_step = float(equipment.get("m_step")) if equipment.get("m_step") is not None else 0.01,
-                    n0 = int(equipment.get("n0")) if equipment.get("n0") is not None else 0,
-                    status = bool(equipment.get("status", True)),
-                )
+        # controllers reference elements, so they are built after them
+        self.build_controllers(data)
 
-            # GENERATOR element
-            self.generators = {}
-            for equipment in elements.get('generators', []):
-                # add series element
-                r_series = float(equipment['z_series']['R'])
-                x_series = float(equipment['z_series']['X'])
-                # the ideal voltage source equivalent
-                z_series = float("inf") if r_series == float("inf") or x_series == float("inf") else r_series + 1j* x_series
-                name = f'generator.{equipment.get("name").lower()}'
-                duplicates_error(name, self.generators)
-                self.generators[name] = Generator(
-                    name = name,
-                    bus_1 = equipment.get('from_bus'),
-                    Z_series = z_series,
-                    V = float(equipment.get("V")) if equipment.get("V") is not None else None,
-                    P = float(equipment.get("P")) if equipment.get("P") is not None else None,
-                    Q = float(equipment.get("Q")) if equipment.get("Q") is not None else None,
-                    Q_max = float(equipment.get("Qg_max")) if equipment.get("Qg_max") is not None else None,
-                    Q_min = float(equipment.get("Qg_min")) if equipment.get("Qg_min") is not None else None,
-                    status = bool(equipment.get("status", True))
-                )
+    def build_controllers(self, data):
+        '''
+            one attribute per controller group from CONTROLLER_SCHEMA, e.g.
+            self.tap_controllers = {full name: TapController}. JSON record example:
+                {"name": "48-47", "elements": ["Transformer 48-47 ckt 1"],
+                 "reg_bus": 48, "v_low": 1.015, "v_high": 1.025, "auto": true}
+            Only "name" and "elements" are required; missing keys use the controller
+            class defaults. An element belongs to at most one controller of a group;
+            elements without one are not controlled (e.g. a transformer keeps its tap).
 
-            # LOAD element
-            self.loads = {}
-            for equipment in elements.get('loads', []):
-                name = f'load.{equipment.get("name").lower()}'
-                duplicates_error(name, self.loads)
-                self.loads[name] = Load(
-                    name = name,
-                    bus_1 = equipment.get('from_bus'),
-                    bus_2 = equipment.get('to_bus', 0), # default value for shunt
-                    P = 0.0 if equipment.get("P") is None else float(equipment.get("P")),
-                    Q = 0.0 if equipment.get("Q") is None else float(equipment.get("Q")),
-                    status = bool(equipment.get("status", True))
-                )
+            In a script, create a controller directly and add it to the group dict:
+                net.tap_controllers["tap_controller.x"] = TapController(
+                    "tap_controller.x", [net.transformers["transformer.x"]], reg_bus=12, auto=True)
+            Without auto = True (JSON or constructor) a controller holds its taps.
+        '''
+        for group, (controller_class, prefix, element_group, fields) in CONTROLLER_SCHEMA.items():
+            store = {}
+            setattr(self, group, store)
+            elements = getattr(self, element_group)
+            owner = {}
+            for record in data.get(group, []):
+                name = f'{prefix}.{record["name"].lower()}'
+                duplicates_error(name, store)
+                members = []
+                for element_name in record["elements"]:
+                    key = f'{ELEMENT_SCHEMA[element_group][1]}.{element_name.lower()}'
+                    if key not in elements:
+                        raise KeyError(f"{name}: unknown element '{element_name}' in {element_group}")
+                    if key in owner:
+                        raise ValueError(f"{name}: '{element_name}' is already controlled by {owner[key]}")
+                    owner[key] = name
+                    members.append(elements[key])
+                kwargs = schema_kwargs(record, fields)
+                store[name] = controller_class(name, members, **kwargs)
+                self.defaulted[name] = sorted(arg for arg, _ in fields.values() if arg not in kwargs)
 
-            # FULL CONVERTER element
-            self.full_converters = {}
-            for equipment in elements.get('full_converters', []):
-                name = f'full_converter.{equipment.get("name").lower()}'
-                duplicates_error(name, self.full_converters)
-                self.full_converters[name] = FullConverter(
-                    name = name,
-                    bus_1 = equipment.get('from_bus'),
-                    P = None if equipment.get("P") is None else float(equipment.get("P")),
-                    Q = None if equipment.get("Q") is None else float(equipment.get("Q")),
-                    kVA_nominal = float(equipment.get("kVA_nominal")) if equipment.get("kVA_nominal") is not None else None,
-                    cos_phi = float(equipment.get("cos_phi")) if equipment.get("cos_phi") is not None else None,
-                    kV_nominal = float(equipment.get("kV_nominal")) if equipment.get("kV_nominal") is not None else None,
-                    K_scc = 1.2 if equipment.get("K_scc") is None else float(equipment.get("K_scc")),
-                    V_min = 0.15 if equipment.get("V_min") is None else float(equipment.get("V_min")),
-                    K_factor = 3.0 if equipment.get("K_factor") is None else float(equipment.get("K_factor")),
-                    status = bool(equipment.get("status", True))
-                )
+    def controllers(self):
+        ''' every controller of every group, in CONTROLLER_SCHEMA order '''
+        return [c for group in CONTROLLER_SCHEMA for c in getattr(self, group).values()]
 
-            # EXTERNAL GRID element
-            self.external_grids = {}
-            for equipment in elements.get('external_grids', []):
-                # add series element
-                r_series, x_series = equipment.get('Z_SC_ohms',{}).get('R'), equipment.get('Z_SC_ohms',{}).get('X')
-                name = f'external_grid.{equipment.get("name").lower()}'
-                duplicates_error(name, self.external_grids)
-                self.external_grids[name] = ExternalGrid(
-                    name = name,
-                    bus_1 = equipment.get('from_bus'),
-                    kV_nom = equipment.get('kV_nom'),
-                    Z_SC_ohms = (float(r_series) + 1j * float(x_series)) if r_series is not None and x_series is not None else None,
-                    S_SC_MVA = equipment.get('S_SC_MVA'),
-                    I_SC_kamps = equipment.get('I_SC_kamps'),
-                    status = bool(equipment.get("status", True))
-                )
-                    
     def buses_type(self):
         PV_id = set()
 

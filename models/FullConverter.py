@@ -3,7 +3,8 @@ import cmath
 import math
 
 class FullConverter:
-    def __init__(self, name, bus_1, P, Q, kVA_nominal, cos_phi, kV_nominal, K_scc, V_min, K_factor, status):
+    def __init__(self, name, bus_1, kVA_nominal, cos_phi, kV_nominal, *,
+                 P=None, Q=None, K_scc=1.2, V_min=0.15, K_factor=3.0, status=True):
         self.element_type = "full_converter"
         self.name = name
         self.bus_1 = bus_1
@@ -12,9 +13,9 @@ class FullConverter:
         self.kVA_nominal = kVA_nominal
         self.cos_phi = cos_phi
         self.kV_nominal = kV_nominal
-        self.K_scc = K_scc # default 1.2 defined @ customnetwork. maximum nominal current multiplier
-        self.V_min = V_min # default 0.15 defined @ customnetwork. 
-        self.K_factor = K_factor # default 3 defined @ customnetwork. voltage drop sensitivity
+        self.K_scc = K_scc # maximum nominal current multiplier
+        self.V_min = V_min
+        self.K_factor = K_factor # voltage drop sensitivity
         self.status = status
 
         sin_phi = (1 - self.cos_phi**2)**0.5

@@ -7,6 +7,10 @@
 - Transformer phase shift: **0° for all transformers** (user-verified for this case).
 - PowerWorld automatic switched-shunt and transformer-tap controls are **not assumed frozen**. The JSON contains the exported snapshot values. If PowerWorld controls move in another scenario, the resulting model states should be recorded when comparing results.
 
+## Conversion warnings and notes
+
+- **Warning:** Transformer 54-53 ckt 1: ControlType LTC without a regulated bus (RegBusNum 0); exported without a tap controller, so its tap stays at m0.
+
 ## Schema audit
 
 **No required field in the current executable JSON schema remains missing for this 37-bus case.**
@@ -36,22 +40,24 @@
 
 These are the tap ratios contained in the exported snapshot. PowerWorld may move controllable taps when solving another operating condition.
 
-| From | To | Ckt | Tap m |
-|---:|---:|:---:|---:|
-| 48 | 47 | 1 | 1.05000 | 0.90000 | 1.10000 | 0.00625 |
-| 12 | 40 | 1 | 1.03125 | 0.90000 | 1.10000 | 0.00625 |
-| 12 | 40 | 2 | 1.03125 | 0.90000 | 1.10000 | 0.00625 |
-| 44 | 41 | 2 | 1.02125 | 0.99000 | 1.10000 | 0.00625 |
-| 44 | 41 | 1 | 1.02125 | 0.99000 | 1.10000 | 0.00625 |
-| 10 | 39 | 1 | 1.01250 | 0.90000 | 1.10000 | 0.00625 |
-| 54 | 53 | 1 | 1.00000 | 0.99000 | 1.10000 | 0.00625 |
-| 28 | 29 | 2 | 1.00000 | 0.90000 | 1.10000 | 0.00625 |
-| 28 | 29 | 1 | 1.00000 | 0.90000 | 1.10000 | 0.00625 |
-| 35 | 31 | 1 | 1.00000 | 0.90000 | 1.10000 | 0.00625 |
-| 33 | 32 | 1 | 1.00000 | 0.90000 | 1.10000 | 0.00625 |
-| 39 | 38 | 1 | 1.00000 | 0.51000 | 1.50000 | 0.00625 |
-| 39 | 38 | 2 | 1.00000 | 0.51000 | 1.50000 | 0.00625 |
-| 1 | 40 | 1 | 1.00000 | 0.90000 | 1.10000 | 0.00625 |
+Blank cells were not in the export and use the `Transformer` class defaults.
+
+| From | To | Ckt | Control | Tap m | m min | m max | m step | Reg bus | V low | V high | Auto |
+|---:|---:|:---:|:---:|---:|---:|---:|---:|---:|---:|---:|:---:|
+| 12 | 40 | 1 | LTC | 1.03125 | 0.90000 | 1.10000 | 0.00625 | 12 | 1.0150 | 1.0250 | yes |
+| 12 | 40 | 2 | LTC | 1.03125 | 0.90000 | 1.10000 | 0.00625 | 12 | 1.0150 | 1.0250 | yes |
+| 10 | 39 | 1 | LTC | 1.01250 | 0.90000 | 1.10000 | 0.00625 | 10 | 1.0150 | 1.0250 | yes |
+| 54 | 53 | 1 | LTC | 1.00000 | 0.99000 | 1.10000 | 0.00625 |  |  |  |  |
+| 48 | 47 | 1 | LTC | 1.05000 | 0.90000 | 1.10000 | 0.00625 | 48 | 1.0150 | 1.0250 | no |
+| 44 | 41 | 2 | LTC | 1.02125 | 0.99000 | 1.10000 | 0.00625 | 44 | 1.0000 | 1.0200 | no |
+| 44 | 41 | 1 | LTC | 1.02125 | 0.99000 | 1.10000 | 0.00625 | 44 | 1.0000 | 1.0200 | no |
+| 39 | 38 | 2 | Fixed | 1.00000 | 0.51000 | 1.50000 | 0.00625 |  |  |  |  |
+| 39 | 38 | 1 | Fixed | 1.00000 | 0.51000 | 1.50000 | 0.00625 |  |  |  |  |
+| 33 | 32 | 1 | LTC | 1.00000 | 0.90000 | 1.10000 | 0.00625 | 33 | 0.9900 | 1.0000 | no |
+| 35 | 31 | 1 | LTC | 1.00000 | 0.90000 | 1.10000 | 0.00625 | 35 | 0.9900 | 1.0000 | no |
+| 28 | 29 | 2 | LTC | 1.00000 | 0.90000 | 1.10000 | 0.00625 | 28 | 0.9900 | 1.0000 | no |
+| 28 | 29 | 1 | LTC | 1.00000 | 0.90000 | 1.10000 | 0.00625 | 28 | 0.9900 | 1.0000 | no |
+| 1 | 40 | 1 | LTC | 1.00000 | 0.90000 | 1.10000 | 0.00625 | 1 | 0.9900 | 1.0000 | no |
 
 ## Switched shunts represented as fixed shunts
 
