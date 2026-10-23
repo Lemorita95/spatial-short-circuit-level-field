@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Glover Strength Explorer</title>
+<title>Fault Strength Explorer</title>
 <!--
   Data-free viewer for results written by experiments/glover37/run_strength_metrics.py.
   Reads metrics_timeseries.csv, metric_variables.csv, run_summary.csv and (optional)
@@ -124,7 +124,7 @@ footer b { color: var(--ink); font-weight: 500 }
 <body>
 <div class="wrap">
   <header>
-    <h1>Glover Strength Explorer</h1>
+    <h1>Fault Strength Explorer</h1>
     <div class="source">
       <span>run <b id="src-run">—</b></span>
       <span id="src-cmp-wrap" hidden>compare <b id="src-cmp">—</b></span>
@@ -164,7 +164,7 @@ footer b { color: var(--ink); font-weight: 500 }
           <div class="key" id="main-key"></div>
         </section>
         <section class="fig" id="sec-cmp-rel" hidden>
-          <div class="fig-head"><h2>Relative to the intact median</h2><span class="formula">Each metric divided by its own median over the intact case, so 1.0 is a typical hour. Compare the shape and timing, not the level.</span></div>
+          <div class="fig-head"><h2 id="cmp-rel-title">Relative to its own median</h2><span class="formula" id="cmp-rel-note"></span><div class="tabs" id="cmp-scale" role="group" aria-label="Scale"></div></div>
           <div class="multiples" id="cmp-rel"></div>
           <div class="key" id="cmp-rel-key"></div>
         </section>
@@ -328,7 +328,7 @@ const MET = {
   SDSCR: { key: 'sdscr', f: 'SDSCR_i = |V_i|² / (|Z_ii|·|P_i + Σ w_ij P_j|) · converter terminal' },
 };
 const MODE_WORD = { off: 'not committed', min: 'at Qmin', max: 'at Qmax', reg: 'regulating voltage' };
-const st = { case: null, metric: 'ESCR', sites: null, cmp: false, hour: null, pinned: false };
+const st = { case: null, metric: 'ESCR', sites: null, cmp: false, cmpScale: 'rel', hour: null, pinned: false };
 
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (x, d = 2) => x == null || !isFinite(x) ? '—' : Number(x).toFixed(d);
@@ -555,7 +555,7 @@ function drawDrivers() {
   });
 }
 
-/* ---- compare: all metrics, each relative to its own intact median ---- */
+/* ---- compare: all metrics, each series relative to its own median (same metric, bus and case) ---- */
 const CMP_METRICS = [['SCR', 'poi', '--m-scr'], ['WSCR', null, '--m-wscr'], ['ESCR', 'escr', '--m-escr'], ['SDSCR', 'sdscr', '--m-sdscr']];
 function median(a) {
   const v = (a || []).filter(x => x != null && isFinite(x)).sort((x, y) => x - y);
@@ -563,10 +563,15 @@ function median(a) {
 }
 const metricSeries = (c, m, bus) => (((D.metrics[c] || {})[m] || {})[bus]) || [];
 function drawCompare() {
-  const ref = D.cases[0], sites = shownSites(), cs = casesShown();
+  const sites = shownSites(), cs = casesShown();
   const metrics = CMP_METRICS.filter(([m]) => D.metricList.includes(m));
+  const rel = st.cmpScale !== 'abs', unit = rel ? '×' : '';
+  document.getElementById('cmp-rel-title').textContent = rel ? 'Relative to its own median' : 'Metric values';
+  document.getElementById('cmp-rel-note').textContent = rel
+    ? 'Each series divided by its own median: same metric, same bus, same case. 1.0 is a typical hour of that series. Compare the shape and timing, not the level; switch to Value for the outage drop.'
+    : 'Each metric as computed. The metrics use different networks, buses and denominators, so their levels are not directly comparable.';
 
-  // 1 · relative to the intact median, one chart per site
+  // 1 · one chart per site, as values or relative to each series' own median
   const box = document.getElementById('cmp-rel');
   box.innerHTML = sites.map((s, k) => `<div class="small"><h3><span style="color:var(${s.color})">●</span> site ${s.label}</h3>` +
     `<p>${metrics.filter(([, key]) => key).map(([m, key]) => `${m} at bus ${s[key]}`).join(' · ')}${metrics.some(([m]) => m === 'WSCR') ? ' · WSCR for the group' : ''}</p>` +
@@ -575,11 +580,14 @@ function drawCompare() {
   const per = sites.map(s => {
     const tr = [];
     metrics.forEach(([m, key, col]) => {
-      const bus = key ? s[key] : 'group', base = median(metricSeries(ref, m, bus));
-      if (!base) return;
-      cs.forEach(c => tr.push(line(metricSeries(c, m, bus).map(x => x == null ? null : x / base),
-        m + (cs.length > 1 ? ' · ' + CASE_SHORT(c) : ''), css(col), dashFor(c), m === 'WSCR' ? 1.1 : 1.5,
-        { hovertemplate: '%{y:.2f}×<extra>' + m + (cs.length > 1 ? ' · ' + CASE_SHORT(c) : '') + '</extra>' })));
+      const bus = key ? s[key] : 'group';
+      cs.forEach(c => {
+        const y = metricSeries(c, m, bus), base = median(y);
+        if (rel && !base) return;
+        tr.push(line(y.map(x => x == null ? null : rel ? x / base : x),
+          m + (cs.length > 1 ? ' · ' + CASE_SHORT(c) : ''), css(col), dashFor(c), m === 'WSCR' ? 1.1 : 1.5,
+          { hovertemplate: '%{y:.2f}' + unit + '<extra>' + m + (cs.length > 1 ? ' · ' + CASE_SHORT(c) : '') + '</extra>' }));
+      });
     });
     return tr;
   });
@@ -587,9 +595,9 @@ function drawCompare() {
   const range = ys.length ? [Math.min(...ys) * 0.97, Math.max(...ys) * 1.03] : undefined;
   const one = [{ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 1, y1: 1, layer: 'below', line: { color: css('--rule'), width: 1 } }];
   per.forEach((tr, k) => {
-    const lay = baseLayout(210, k === 0 ? '× intact median' : '', { margin: { l: 50, r: 8, t: 6, b: 32 } });
+    const lay = baseLayout(210, k === 0 ? (rel ? '× own median' : 'value') : '', { margin: { l: 50, r: 8, t: 6, b: 32 } });
     if (range) lay.yaxis.range = range;
-    plot('cmprel' + k, tr, lay, one);
+    plot('cmprel' + k, tr, lay, rel ? one : []);
   });
   document.getElementById('cmp-rel-key').innerHTML =
     metrics.map(([m, , col]) => `<span><i class="sw" style="color:var(${col})"></i>${m}</span>`).join('') +
@@ -617,7 +625,7 @@ function drawMinima() {
     const tr = [], labels = [];
     metrics.forEach(([m, key, col]) => cs.forEach(c => {
       const bus = key ? s[key] : 'group', y = metricSeries(c, m, bus), lbl = rowName(m, c), color = css(col);
-      const base = median(metricSeries(ref, m, bus)), h = argMin(y), lo = lowest(y, LOW_FRAC);
+      const base = median(y), h = argMin(y), lo = lowest(y, LOW_FRAC);
       labels.push(lbl);
       found.push({ s, m, c, h, v: h == null ? null : y[h], rel: h != null && base ? y[h] / base : null });
       tr.push({ x: lo.map(i => D.T[i]), y: lo.map(() => lbl), customdata: lo, type: 'scatter', mode: 'markers', name: lbl,
@@ -625,7 +633,7 @@ function drawMinima() {
         hovertemplate: `%{x|%a %d %H:%M}<extra>${lbl} · lowest ${Math.round(LOW_FRAC * 100)} %</extra>` });
       if (h != null) tr.push({ x: [D.T[h]], y: [lbl], customdata: [h], type: 'scatter', mode: 'markers', name: lbl + ' minimum',
         marker: { symbol: c === ref ? 'circle' : 'circle-open', size: 10, color, line: { width: 1.6, color } },
-        hovertemplate: `${fmt(y[h])}${base ? ` · ${fmt(y[h] / base)}× intact median` : ''}<br>%{x|%a %d %H:%M}<extra>${lbl} minimum</extra>` });
+        hovertemplate: `${fmt(y[h])}${base ? ` · ${fmt(y[h] / base)}× own median` : ''}<br>%{x|%a %d %H:%M}<extra>${lbl} minimum</extra>` });
     }));
     const lay = baseLayout(labels.length * 24 + 44, '', { hovermode: 'closest', margin: { l: 10, r: 10, t: 6, b: 32 } });
     Object.assign(lay.xaxis, { range: xr, showgrid: true, gridcolor: css('--grid') });
@@ -638,7 +646,7 @@ function drawMinima() {
     (cs.length > 1 ? `<span>filled: ${CASE_SHORT(ref)} minimum · open: other case</span>` : '') +
     '<span>WSCR is one value for the group, repeated in each site</span>';
   const head = '<thead><tr><th>Site</th><th>Metric</th>' + cs.map(c => `<th colspan="3">${CASE_LABEL(c)}</th>`).join('') + '</tr>' +
-    '<tr><th></th><th></th>' + cs.map(() => '<th>min</th><th>× intact median</th><th>when</th>').join('') + '</tr></thead>';
+    '<tr><th></th><th></th>' + cs.map(() => '<th>min</th><th>× own median</th><th>when</th>').join('') + '</tr></thead>';
   const body = sites.map(s => metrics.map(([m], i) => `<tr${i === 0 ? ' class="first"' : ''}><td>${i === 0 ? `<span style="color:var(${s.color})">●</span> ${s.label}` : ''}</td><td>${m}</td>` +
     cs.map(c => { const r = found.find(f => f.s === s && f.m === m && f.c === c); return `<td>${fmt(r.v)}</td><td>${fmt(r.rel)}</td><td>${r.h == null ? '—' : dayTime(D.T[r.h])}</td>`; }).join('') +
     '</tr>').join('')).join('');
@@ -680,6 +688,7 @@ function tabs(id, items, key) {
 function buildControls() {
   tabs('case', D.cases.map(c => [c, CASE_LABEL(c)]).concat(D.cases.length > 1 ? [['both', 'Both']] : []), 'case');
   tabs('metric', D.metricList.map(m => [m, m]).concat([['Compare', 'Compare']]), 'metric');
+  tabs('cmp-scale', [['rel', '× own median'], ['abs', 'Value']], 'cmpScale');
   const sb = document.getElementById('sites');
   sb.innerHTML = D.sites.map(s => `<button type="button" class="chip" data-s="${s.id}"><i style="background:var(${s.color})"></i>${s.label}</button>`).join('');
   sb.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
@@ -690,13 +699,13 @@ function buildControls() {
 }
 function syncControls() {
   const press = (id, v) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
-  press('case', st.case); press('metric', st.metric);
+  press('case', st.case); press('metric', st.metric); press('cmp-scale', st.cmpScale);
   document.querySelectorAll('#sites .chip').forEach(b => b.setAttribute('aria-pressed', String(st.sites.has(Number(b.dataset.s)))));
   const t = document.getElementById('cmp'); t.checked = st.cmp && !!CMP; t.disabled = !CMP;
   document.getElementById('cmp-toggle').classList.toggle('disabled', !CMP);
 }
 const KEY = 'glover-strength-explorer';
-function save() { try { localStorage.setItem(KEY, JSON.stringify({ case: st.case, metric: st.metric, sites: [...st.sites], cmp: st.cmp })); } catch (e) {} }
+function save() { try { localStorage.setItem(KEY, JSON.stringify({ case: st.case, metric: st.metric, sites: [...st.sites], cmp: st.cmp, cmpScale: st.cmpScale })); } catch (e) {} }
 function restore() {
   let v = null; try { v = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
   st.case = v && (D.cases.includes(v.case) || (v.case === 'both' && D.cases.length > 1)) ? v.case : D.cases[0];
@@ -704,6 +713,7 @@ function restore() {
   const ids = new Set(D.sites.map(s => s.id));
   st.sites = new Set(v && v.sites ? v.sites.filter(x => ids.has(x)) : [...ids]); if (!st.sites.size) st.sites = new Set(ids);
   st.cmp = !!(v && v.cmp);
+  st.cmpScale = v && v.cmpScale === 'abs' ? 'abs' : 'rel';
 }
 function render() {
   syncControls();
