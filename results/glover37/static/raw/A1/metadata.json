@@ -16,11 +16,11 @@
   "short_circuit_converged": true,
   "short_circuit_failed_buses": [],
   "totals": {
-    "total_gen_MW": 819.4542314240734,
+    "total_gen_MW": 819.346175798499,
     "total_load_MW": 805.72,
-    "total_shunt_MW": 0.6486514108719759,
+    "total_shunt_MW": 0.6497255080225892,
     "total_conv_MW": 0.0,
-    "total_losses_MW": 13.08558001320153,
-    "loss_pct": 1.5968652685411113
+    "total_losses_MW": 12.976450290476373,
+    "loss_pct": 1.5837567408952746
   }
 }

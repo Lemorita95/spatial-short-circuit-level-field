@@ -8,11 +8,11 @@
     29
   ],
   "rank_Yet": 1,
-  "cond_middle": 1.7530288369112856,
-  "max_Z_algorithm_error": 6.938893903907228e-17,
-  "mean_Z_algorithm_error": 2.8262545477297363e-17,
-  "max_secondary_Y": 0.0008382885089489769,
-  "mean_secondary_Y": 3.272813150942401e-06,
+  "cond_middle": 1.7530456002890618,
+  "max_Z_algorithm_error": 7.029912040668097e-17,
+  "mean_Z_algorithm_error": 7.768621621207356e-18,
+  "max_secondary_Y": 0.0008289144527650539,
+  "mean_secondary_Y": 2.518789664912787e-06,
   "baseline_max_Y_variation": 0.0,
   "scenario_max_Y_variation": 0.0
 }
