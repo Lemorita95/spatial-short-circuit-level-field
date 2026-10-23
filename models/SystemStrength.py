@@ -173,8 +173,21 @@ class ESCR(_MetricHistory):
     voltage_tolerance_pu: float = 1e-5
     probe_q_limit_pu: float = 1e6
 
-    def _solve_voltage_step(self, net, v0, bus):
-        """Solve one prescribed voltage step on a disposable network copy."""
+    def _base_pv_state(self, net, v0):
+        """Generator states (0 PV, +1 at Qmax, -1 at Qmin) of the solved base state."""
+        pf = PowerFlow()
+        v0 = np.asarray(v0, dtype=complex)
+        if pf.solve_power_flow(net, warm_start=(np.angle(v0), np.abs(v0)), controls=False) is None:
+            raise RuntimeError('Base power flow failed while reading generator states for ESCR')
+        return dict(pf.pv_state)
+
+    def _solve_voltage_step(self, net, v0, bus, base_state=None):
+        """Solve one prescribed voltage step on a disposable network copy.
+
+        The solve starts from the base voltages and generator states (base_state).
+        Returns also the generators whose state changed during the step,
+        {generator bus: (base state, probe state)}.
+        """
         working = deepcopy(net)
         name = f'generator.escr_voltage_probe_{bus}'
         if name in working.generators:
@@ -205,7 +218,8 @@ class ESCR(_MetricHistory):
         # voltage step; the solve starts from the solved base state.
         pf = PowerFlow()
         v0 = np.asarray(v0, dtype=complex)
-        solved = pf.solve_power_flow(working, warm_start=(np.angle(v0), np.abs(v0)), controls=False)
+        solved = pf.solve_power_flow(working, warm_start=(np.angle(v0), np.abs(v0)),
+                                     pv_state=base_state, controls=False)
         if solved is None:
             raise RuntimeError(f'Power flow failed for prescribed voltage step at bus {bus}')
         angles, magnitudes = solved
@@ -224,7 +238,12 @@ class ESCR(_MetricHistory):
         pq_gen = pf.bus_flow(working, np.r_[angles, magnitudes])[1]
         probe_q_pu = pq_gen[1, working.idx[bus]]
         probe_q_mvar = float(probe_q_pu) * self.s_base_mva
-        return probe_q_mvar, target_mag, actual_mag, v_new
+
+        # generators (other than the probe) that changed PV/PQ state during the step
+        base_state = base_state or {}
+        pv_changes = {g: (base_state[g], s) for g, s in pf.pv_state.items()
+                      if g in base_state and s != base_state[g]}
+        return probe_q_mvar, target_mag, actual_mag, v_new, pv_changes
 
     def evaluate(self, step, net, v_pf):
         buses = tuple(self.rated_mw)
@@ -239,9 +258,16 @@ class ESCR(_MetricHistory):
         actual_v = {}
         delta_v = {}
         values = {}
+        pv_changes = {}
+        base_state = self._base_pv_state(net, v_pf)
 
         for i in buses:
-            q_mvar, target_mag, actual_mag, v_new = self._solve_voltage_step(net, v_pf, i)
+            q_mvar, target_mag, actual_mag, v_new, changes = self._solve_voltage_step(
+                net, v_pf, i, base_state)
+            pv_changes[i] = len(changes)
+            if changes:
+                warnings.warn(f'{step}: ESCR probe at bus {i} changed generator states '
+                              f'{changes} (bus: (base, probe); 0 PV, +1 Qmax, -1 Qmin)')
             probe_q[i] = q_mvar
             target_v[i] = target_mag
             actual_v[i] = actual_mag
@@ -268,6 +294,7 @@ class ESCR(_MetricHistory):
             scmva=scmva,
             if_magnitude=interaction,
             probe_reactive_power_mvar=probe_q,
+            probe_pv_changes=pv_changes,
             target_voltage_pu=target_v,
             actual_voltage_pu=actual_v,
             delta_v_pu=delta_v,

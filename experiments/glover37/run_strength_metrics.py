@@ -20,6 +20,8 @@ import pandas as pd
 
 from models.PowerFlow import PowerFlow
 from models.SystemStrength import SCR, WSCR, ESCR, SDSCR
+from models.VoltageLimits import PRESETS, VoltageLimits
+from experiments.glover37.state_audit import operating_state_audit
 from experiments.glover37.strength_config import SITES, augment_network
 from experiments.glover37.run_temporal import (
     GEN_LIMITS_FILE, CONTINGENCY_CASE, ROOT, S_BASE_MVA,
@@ -31,11 +33,13 @@ DEFAULT_OUTPUT = ROOT / 'results' / 'glover37' / 'strength'
 
 
 def solve_pf(network):
-    solved = PowerFlow().solve_power_flow(network)
+    '''complex bus voltages and the PowerFlow instance (generator states, control records).'''
+    pf = PowerFlow()
+    solved = pf.solve_power_flow(network)
     if solved is None:
         raise RuntimeError('Power flow failed')
     theta, magnitude = solved
-    return magnitude * np.exp(1j * theta)
+    return magnitude * np.exp(1j * theta), pf
 
 
 def scalar_components(value):
@@ -66,6 +70,7 @@ def emit_metric(rows, details, metric_name, record, hour, timestamp, case):
     # Keep the inputs and intermediate terms needed to explain temporal changes.
     for key, unit in [('scmva', 'MVA'), ('rated_mw', 'MW'),
                       ('operating_mw', 'MW'), ('probe_reactive_power_mvar', 'MVAr'),
+                      ('probe_pv_changes', 'count'),
                       ('target_voltage_pu', 'pu'), ('actual_voltage_pu', 'pu'),
                       ('z_ii', 'pu'), ('v_pf', 'pu')]:
         for bus, val in record.get(key, {}).items():
@@ -93,7 +98,9 @@ def emit_metric(rows, details, metric_name, record, hour, timestamp, case):
                               value=record['z_rr'][i, j], unit='pu')
 
 
-def evaluate_temporal(week, *, with_outage=False, out_dir=DEFAULT_OUTPUT):
+def evaluate_temporal(week, *, with_outage=False, out_dir=DEFAULT_OUTPUT, voltage_limits=None):
+    # voltage bands only flag states in run_summary.csv; nothing is corrected
+    voltage_limits = voltage_limits or VoltageLimits.preset()
     limits = read_gen_limits(GEN_LIMITS_FILE)
     base_load_mw = baseline_load_mw()
     ibr_mw = sum(site.operating_mw for site in SITES)
@@ -145,10 +152,14 @@ def evaluate_temporal(week, *, with_outage=False, out_dir=DEFAULT_OUTPUT):
                 'error': '',
             }
             try:
-                base_v = solve_pf(base_net)
+                base_v, base_pf = solve_pf(base_net)
                 state['base_pf_ok'] = True
-                aug_v = solve_pf(aug_net)
+                state.update(operating_state_audit(base_net, base_pf, np.abs(base_v),
+                                                   voltage_limits, prefix='base_'))
+                aug_v, aug_pf = solve_pf(aug_net)
                 state['ibr_pf_ok'] = True
+                state.update(operating_state_audit(aug_net, aug_pf, np.abs(aug_v),
+                                                   voltage_limits, prefix='ibr_'))
                 for name, net, voltage in [
                     ('SCR', base_net, base_v), ('WSCR', base_net, base_v),
                     ('ESCR', aug_net, aug_v), ('SDSCR', aug_net, aug_v),
@@ -200,6 +211,8 @@ def main():
     parser.add_argument('--with-outage', action='store_true',
                         help='Also evaluate the established line 39-47 contingency.')
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument('--voltage-preset', default='default', choices=sorted(PRESETS),
+                        help='VoltageLimits preset used to flag out-of-band states.')
     args = parser.parse_args()
     if not 1 <= args.hours <= 168:
         parser.error('--hours must be between 1 and 168')
@@ -208,7 +221,8 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     temp_output = Path(tempfile.mkdtemp(prefix='.strength-run-', dir=output.parent))
     try:
-        metrics = evaluate_temporal(week, with_outage=args.with_outage, out_dir=temp_output)
+        metrics = evaluate_temporal(week, with_outage=args.with_outage, out_dir=temp_output,
+                                    voltage_limits=VoltageLimits.preset(args.voltage_preset))
         # Replace the published result set only after every requested state has
         # completed successfully. Failed runs leave the previous full result set intact.
         output.mkdir(parents=True, exist_ok=True)

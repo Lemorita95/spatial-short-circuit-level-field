@@ -87,12 +87,13 @@ def augment_network(net):
         raise ValueError("IBR bus IDs already exist; network may be augmented")
 
     for site in SITES:
-        for bus_id, label in (
-            (site.main_mv_bus, "COLLECTOR_MV"),
-            (site.padmount_hv_bus, "PADMOUNT_HV"),
-            (site.converter_lv_bus, "CONVERTER_LV"),
+        for bus_id, label, nom_kv in (
+            (site.main_mv_bus, "COLLECTOR_MV", MV_KV),
+            (site.padmount_hv_bus, "PADMOUNT_HV", MV_KV),
+            (site.converter_lv_bus, "CONVERTER_LV", LV_KV),
         ):
-            net.buses[bus_id] = Bus(bus_id, f"IBR{site.host_bus}_{label}", "PQ", None, None)
+            net.buses[bus_id] = Bus(bus_id, f"IBR{site.host_bus}_{label}", "PQ", None, None,
+                                    nom_kv=nom_kv)
 
         main = f"transformer.ibr{site.host_bus}_main"
         feeder = f"line.ibr{site.host_bus}_collector"

@@ -3,153 +3,190 @@
         {
             "id": 31,
             "name": "SLACK345",
+            "nom_kv": 345.0,
             "bus_type": "Slack",
             "V": 1.03,
             "angle": -14.78
         },
         {
             "id": 27,
-            "name": "HISKY69"
+            "name": "HISKY69",
+            "nom_kv": 69.0
         },
         {
             "id": 10,
-            "name": "RAY69"
+            "name": "RAY69",
+            "nom_kv": 69.0
         },
         {
             "id": 12,
-            "name": "TIM69"
+            "name": "TIM69",
+            "nom_kv": 69.0
         },
         {
             "id": 13,
-            "name": "FERNA69"
+            "name": "FERNA69",
+            "nom_kv": 69.0
         },
         {
             "id": 15,
-            "name": "ZEB69"
+            "name": "ZEB69",
+            "nom_kv": 69.0
         },
         {
             "id": 55,
-            "name": "DEMAR69"
+            "name": "DEMAR69",
+            "nom_kv": 69.0
         },
         {
             "id": 16,
-            "name": "PETE69"
+            "name": "PETE69",
+            "nom_kv": 69.0
         },
         {
             "id": 17,
-            "name": "PAI69"
+            "name": "PAI69",
+            "nom_kv": 69.0
         },
         {
             "id": 18,
-            "name": "HANNAH69"
+            "name": "HANNAH69",
+            "nom_kv": 69.0
         },
         {
             "id": 19,
-            "name": "GROSS69"
+            "name": "GROSS69",
+            "nom_kv": 69.0
         },
         {
             "id": 20,
-            "name": "SCOT69"
+            "name": "SCOT69",
+            "nom_kv": 69.0
         },
         {
             "id": 21,
-            "name": "WOLEN69"
+            "name": "WOLEN69",
+            "nom_kv": 69.0
         },
         {
             "id": 5,
-            "name": "HOMER69"
+            "name": "HOMER69",
+            "nom_kv": 69.0
         },
         {
             "id": 1,
-            "name": "TIM345"
+            "name": "TIM345",
+            "nom_kv": 345.0
         },
         {
             "id": 56,
-            "name": "LYNN138"
+            "name": "LYNN138",
+            "nom_kv": 138.0
         },
         {
             "id": 29,
-            "name": "JO138"
+            "name": "JO138",
+            "nom_kv": 138.0
         },
         {
             "id": 30,
-            "name": "CAROL138"
+            "name": "CAROL138",
+            "nom_kv": 138.0
         },
         {
             "id": 3,
-            "name": "MORO138"
+            "name": "MORO138",
+            "nom_kv": 138.0
         },
         {
             "id": 32,
-            "name": "NICOL138"
+            "name": "NICOL138",
+            "nom_kv": 138.0
         },
         {
             "id": 33,
-            "name": "NICOL69"
+            "name": "NICOL69",
+            "nom_kv": 69.0
         },
         {
             "id": 34,
-            "name": "PATTEN69"
+            "name": "PATTEN69",
+            "nom_kv": 69.0
         },
         {
             "id": 35,
-            "name": "SLACK138"
+            "name": "SLACK138",
+            "nom_kv": 138.0
         },
         {
             "id": 37,
-            "name": "AMANDA69"
+            "name": "AMANDA69",
+            "nom_kv": 69.0
         },
         {
             "id": 38,
-            "name": "RAY345"
+            "name": "RAY345",
+            "nom_kv": 345.0
         },
         {
             "id": 39,
-            "name": "RAY138"
+            "name": "RAY138",
+            "nom_kv": 138.0
         },
         {
             "id": 40,
-            "name": "TIM138"
+            "name": "TIM138",
+            "nom_kv": 138.0
         },
         {
             "id": 41,
-            "name": "LAUF138"
+            "name": "LAUF138",
+            "nom_kv": 138.0
         },
         {
             "id": 24,
-            "name": "HIMAN69"
+            "name": "HIMAN69",
+            "nom_kv": 69.0
         },
         {
             "id": 47,
-            "name": "BOB138"
+            "name": "BOB138",
+            "nom_kv": 138.0
         },
         {
             "id": 44,
-            "name": "LAUF69"
+            "name": "LAUF69",
+            "nom_kv": 69.0
         },
         {
             "id": 14,
-            "name": "WEBER69"
+            "name": "WEBER69",
+            "nom_kv": 69.0
         },
         {
             "id": 54,
-            "name": "SANDERS69"
+            "name": "SANDERS69",
+            "nom_kv": 69.0
         },
         {
             "id": 53,
-            "name": "SANDERS138"
+            "name": "SANDERS138",
+            "nom_kv": 138.0
         },
         {
             "id": 28,
-            "name": "JO345"
+            "name": "JO345",
+            "nom_kv": 345.0
         },
         {
             "id": 50,
-            "name": "DAVIS69"
+            "name": "DAVIS69",
+            "nom_kv": 69.0
         },
         {
             "id": 48,
-            "name": "BOB69"
+            "name": "BOB69",
+            "nom_kv": 69.0
         }
     ],
     "elements": {

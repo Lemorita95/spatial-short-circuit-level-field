@@ -124,6 +124,7 @@ BUS_SCHEMA = {
     "bus_type": ("bus_type", as_is),
     "V": ("V", float),
     "angle": ("angle", float),
+    "nom_kv": ("nom_kv", float),
 }
 
 

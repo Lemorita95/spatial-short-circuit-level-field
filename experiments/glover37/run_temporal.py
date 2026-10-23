@@ -58,6 +58,8 @@ sys.path.insert(0, str(ROOT)) if str(ROOT) not in sys.path else None
 
 from models.CustomNetwork import CustomNetwork  # noqa: E402
 from models.PowerFlow import PowerFlow  # noqa: E402
+from models.VoltageLimits import PRESETS, VoltageLimits  # noqa: E402
+from experiments.glover37.state_audit import operating_state_audit  # noqa: E402
 from models.ShortCircuit import ShortCircuit as SC  # noqa: E402
 
 CASE_FILE = ROOT / "cases" / "glover37.json"
@@ -368,7 +370,12 @@ def solve_snapshot(
     dispatch,
     limits,
     contingency=False,
+    voltage_limits=None,
 ):
+    '''
+        returns (bus rows, failed SCC buses, power-flow converged, state audit);
+        the audit (voltage-band flags, control actions) is {} without voltage_limits.
+    '''
     net = prepare_network(
         load_scale,
         dispatch,
@@ -380,9 +387,14 @@ def solve_snapshot(
     solved = pf.solve_power_flow(net)
 
     if solved is None:
-        return [], [], False
+        return [], [], False, {}
 
     theta, voltage = solved
+    audit = (
+        operating_state_audit(net, pf, voltage, voltage_limits)
+        if voltage_limits is not None
+        else {}
+    )
     state = np.concatenate(
         (theta, voltage)
     )
@@ -456,7 +468,7 @@ def solve_snapshot(
             }
         )
 
-    return rows, failed, True
+    return rows, failed, True, audit
 
 
 # =============================================================================
@@ -467,6 +479,7 @@ def run_timeseries(
     week,
     limits,
     dispatch_by_hour,
+    voltage_limits=None,
 ):
     scl_rows = []
     summary = []
@@ -490,11 +503,12 @@ def run_timeseries(
             ("intact", False),
             (CONTINGENCY_CASE, True),
         ):
-            buses, failed, pf_ok = solve_snapshot(
+            buses, failed, pf_ok, audit = solve_snapshot(
                 float(row.load_scale),
                 dispatch,
                 limits,
                 outage,
+                voltage_limits,
             )
 
             summary.append(
@@ -513,6 +527,7 @@ def run_timeseries(
                     "non_slack_dispatch_MW": sum(
                         dispatch.values()
                     ),
+                    **audit,
                 }
             )
 
@@ -536,6 +551,7 @@ def run_timeseries(
 
 def run_reference(
     limits: list[GenLimit],
+    voltage_limits=None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Solve the independent intact temporal reference state.
@@ -571,11 +587,12 @@ def run_reference(
         f"committed={committed}"
     )
 
-    buses, failed, pf_ok = solve_snapshot(
+    buses, failed, pf_ok, audit = solve_snapshot(
         REFERENCE_LOAD_SCALE,
         dispatch,
         limits,
         contingency=False,
+        voltage_limits=voltage_limits,
     )
 
     if not pf_ok:
@@ -626,6 +643,7 @@ def run_reference(
             g.key: float(dispatch[g.key])
             for g in limits
         },
+        "operating_state_audit": audit,
     }
 
     return reference, context
@@ -840,7 +858,15 @@ def main():
         default='SE3',
     )
 
+    parser.add_argument(
+        "--voltage-preset",
+        default="default",
+        choices=sorted(PRESETS),
+        help="VoltageLimits preset used to flag out-of-band states.",
+    )
+
     args = parser.parse_args()
+    voltage_limits = VoltageLimits.preset(args.voltage_preset)
 
     profile = read_se3(
         args.se3_file,
@@ -890,11 +916,13 @@ def main():
         week,
         limits,
         dispatch_by_hour,
+        voltage_limits,
     )
 
     reference, reference_context = (
         run_reference(
-            limits
+            limits,
+            voltage_limits,
         )
     )
 

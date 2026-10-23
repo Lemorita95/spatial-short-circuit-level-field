@@ -7,6 +7,8 @@ from typing import Optional
 S_BASE_MVA = 100.0
 TRANSFORMER_PHASE_SHIFT_DEG = 0.0
 
+# JSON key -> PowerWorld bus column, written for every bus when the column has a value
+BUS_COLUMNS = {"nom_kv": "NomkV"}
 # JSON key -> PowerWorld branch column, written only when the column has a value
 TRANSFORMER_TAP_COLUMNS = {"m0": "Tap", "m_min": "TapMin", "m_max": "TapMax", "m_step": "TapStepSize"}
 TRANSFORMER_BAND_COLUMNS = {"v_low": "RegMin", "v_high": "RegMax"}
@@ -74,6 +76,10 @@ def convert(folder: Path) -> tuple[dict, str]:
             "id": bus_id,
             "name": row["Name"].strip(),
         }
+        for key, col in BUS_COLUMNS.items():
+            value = pw_float(row.get(col))
+            if value is not None:
+                item[key] = value
         # Match the existing executable case schema: only the slack bus needs
         # an explicit type / starting voltage / angle.
         if bus_id == slack_id:
