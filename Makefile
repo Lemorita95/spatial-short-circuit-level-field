@@ -50,6 +50,7 @@ REPRODUCE_LOG := $(LOG_DIR)/reproduce.log
 	temporal-analysis \
 	temporal-figures \
 	strength \
+	explorer \
 	test \
 	reproduce \
 	clean
@@ -77,6 +78,7 @@ help:
 	@echo "  make temporal-figures    Generate temporal paper figures"
 	@echo
 	@echo "Other:"
+	@echo "  make explorer            Open the strength results explorer (Ctrl-C to stop)"
 	@echo "  make test                Run the solver checks in tests/"
 	@echo "  make case                Rebuild the 37-bus case from PowerWorld exports"
 	@echo "  make reproduce           Reproduce the complete numerical evidence chain"
@@ -198,6 +200,16 @@ strength:
 		--with-outage \
 		--voltage-preset $(VOLTAGE_PRESET) \
 		--output $(STRENGTH_RESULTS)
+
+
+# -----------------------------------------------------------------------------
+# Results explorer
+# tools/explorer.py serves the repository on localhost and opens tools/explorer.html,
+# which reads results/glover37/strength/ at runtime.
+# -----------------------------------------------------------------------------
+
+explorer:
+	$(PYTHON) tools/explorer.py
 
 
 # -----------------------------------------------------------------------------
