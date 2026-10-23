@@ -2,6 +2,9 @@ export PYTHONUTF8 := 1
 
 PYTHON ?= python
 
+# VoltageLimits preset used to flag out-of-band states (models/VoltageLimits.py PRESETS)
+VOLTAGE_PRESET ?= default
+
 CASE := cases/glover37.json
 POWERWORLD_DATA := data/powerworld/glover37
 SE3_DATA := data/se3_2025.csv
@@ -21,6 +24,8 @@ MECHANISM_ANALYSIS := $(MECHANISM_ROOT)/analysis
 TEMPORAL_ROOT := $(RESULTS)/temporal
 TEMPORAL_RAW := $(TEMPORAL_ROOT)/raw
 TEMPORAL_ANALYSIS := $(TEMPORAL_ROOT)/analysis
+
+STRENGTH_RESULTS := $(RESULTS)/strength
 
 FIGURES := figures/glover37
 
@@ -44,6 +49,8 @@ REPRODUCE_LOG := $(LOG_DIR)/reproduce.log
 	temporal-run \
 	temporal-analysis \
 	temporal-figures \
+	strength \
+	test \
 	reproduce \
 	clean
 
@@ -55,6 +62,7 @@ help:
 	@echo "  make static              Run, analyze, and plot the static experiment"
 	@echo "  make mechanism           Run, analyze, and plot the mechanism experiment"
 	@echo "  make temporal            Run, analyze, and plot the temporal experiment"
+	@echo "  make strength            Run the 168 h system-strength metrics (intact + outage)"
 	@echo
 	@echo "Individual stages:"
 	@echo "  make static-run          Generate static raw results"
@@ -69,9 +77,13 @@ help:
 	@echo "  make temporal-figures    Generate temporal paper figures"
 	@echo
 	@echo "Other:"
+	@echo "  make test                Run the solver checks in tests/"
 	@echo "  make case                Rebuild the 37-bus case from PowerWorld exports"
 	@echo "  make reproduce           Reproduce the complete numerical evidence chain"
 	@echo "  make clean               Remove generated 37-bus results and figures"
+	@echo
+	@echo "Variables:"
+	@echo "  PYTHON=$(PYTHON)  VOLTAGE_PRESET=$(VOLTAGE_PRESET)"
 
 
 # -----------------------------------------------------------------------------
@@ -162,7 +174,8 @@ temporal-run:
 	$(PYTHON) -m experiments.glover37.run_temporal \
 		--se3-file $(SE3_DATA) \
 		--timestamp-column timestamp \
-		--load-column SE3
+		--load-column SE3 \
+		--voltage-preset $(VOLTAGE_PRESET)
 
 
 temporal-analysis:
@@ -176,6 +189,26 @@ temporal-figures:
 
 
 # -----------------------------------------------------------------------------
+# System-strength metrics experiment (SCR, WSCR, ESCR, SDSCR)
+# run -> results/glover37/strength/
+# -----------------------------------------------------------------------------
+
+strength:
+	$(PYTHON) -m experiments.glover37.run_strength_metrics \
+		--with-outage \
+		--voltage-preset $(VOLTAGE_PRESET) \
+		--output $(STRENGTH_RESULTS)
+
+
+# -----------------------------------------------------------------------------
+# Solver checks
+# -----------------------------------------------------------------------------
+
+test:
+	$(PYTHON) -m unittest discover -s tests -v
+
+
+# -----------------------------------------------------------------------------
 # Complete reproduction
 # -----------------------------------------------------------------------------
 
@@ -184,25 +217,33 @@ reproduce:
 	@: > $(REPRODUCE_LOG)
 	@echo "Starting full reproduction..."
 
-	@echo "[1/5] RUNNING: case reconstruction"
+	@echo "[1/7] RUNNING: solver checks"
+	@$(MAKE) test >> $(REPRODUCE_LOG) 2>&1
+	@echo "[1/7] DONE:    solver checks"
+
+	@echo "[2/7] RUNNING: case reconstruction"
 	@$(MAKE) case >> $(REPRODUCE_LOG) 2>&1
-	@echo "[1/5] DONE:    case reconstruction"
+	@echo "[2/7] DONE:    case reconstruction"
 
-	@echo "[2/5] RUNNING: static experiment"
+	@echo "[3/7] RUNNING: static experiment"
 	@$(MAKE) static >> $(REPRODUCE_LOG) 2>&1
-	@echo "[2/5] DONE:    static experiment"
+	@echo "[3/7] DONE:    static experiment"
 
-	@echo "[3/5] RUNNING: PowerWorld validation"
+	@echo "[4/7] RUNNING: PowerWorld validation"
 	@$(MAKE) validation >> $(REPRODUCE_LOG) 2>&1
-	@echo "[3/5] DONE:    PowerWorld validation"
+	@echo "[4/7] DONE:    PowerWorld validation"
 
-	@echo "[4/5] RUNNING: mechanism experiment"
+	@echo "[5/7] RUNNING: mechanism experiment"
 	@$(MAKE) mechanism >> $(REPRODUCE_LOG) 2>&1
-	@echo "[4/5] DONE:    mechanism experiment"
+	@echo "[5/7] DONE:    mechanism experiment"
 
-	@echo "[5/5] RUNNING: temporal experiment"
+	@echo "[6/7] RUNNING: temporal experiment"
 	@$(MAKE) temporal >> $(REPRODUCE_LOG) 2>&1
-	@echo "[5/5] DONE:    temporal experiment"
+	@echo "[6/7] DONE:    temporal experiment"
+
+	@echo "[7/7] RUNNING: system-strength experiment"
+	@$(MAKE) strength >> $(REPRODUCE_LOG) 2>&1
+	@echo "[7/7] DONE:    system-strength experiment"
 
 	@echo "Reproduction complete."
 	@echo "Log file: $(REPRODUCE_LOG)"
