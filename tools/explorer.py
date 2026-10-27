@@ -1,4 +1,4 @@
-"""Open tools/strength_explorer.html with live access to results/.
+"""Open tools/explorer.html with live access to results/.
 
 Browsers do not let a page opened from disk read other files, so this serves the
 repository on localhost (only this computer can reach it) and opens the page.

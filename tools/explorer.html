@@ -5,16 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fault Strength Explorer</title>
 <!--
-  Data-free viewer for results written by experiments/glover37/run_strength_metrics.py.
+  Data-free viewer for results written by experiments/glover37/simulate.py.
   Reads metrics_timeseries.csv, metric_variables.csv, run_summary.csv and (optional)
   dispatch_schedule.csv at runtime; nothing is embedded.
 
   Open it with:   python tools/explorer.py   (serves the repo on localhost and opens this page)
   Query options:  ?run=<folder>      results folder, relative to this page
-                                     (default ../results/glover37/strength/raw/)
+                                     (default ../results/glover37/raw/)
                   ?compare=<folder>  a second run, drawn dotted on the metric chart
   Opened by double-click (file://), browsers do not let the page read the CSVs: use
-  "Choose results folder" and pick results/glover37/strength/raw instead.
+  "Choose results folder" and pick results/glover37/raw instead.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -202,7 +202,7 @@ footer b { color: var(--ink); font-weight: 500 }
 const FILES = ['metrics_timeseries.csv', 'metric_variables.csv', 'run_summary.csv'];
 const OPTIONAL = ['dispatch_schedule.csv'];
 const params = new URLSearchParams(location.search);
-const DEFAULT_RUN = '../results/glover37/strength/raw/';
+const DEFAULT_RUN = '../results/glover37/raw/';
 const source = { run: params.get('run') || DEFAULT_RUN, compare: params.get('compare'), runFiles: null, cmpFiles: null };
 const slash = d => d.replace(/\/?$/, '/');
 
@@ -742,7 +742,7 @@ async function load() {
     const files = source.runFiles ? await readFromPicker(source.runFiles) : await readFromUrl(source.run);
     D = build(files);
   } catch (e) {
-    const hint = location.protocol === 'file:' ? ' Opened straight from disk, the browser does not let the page read these files. Run <code>python tools/explorer.py</code> from the repository, or use <b>Choose results folder</b> and pick <code>results/glover37/strength</code>.' : '';
+    const hint = location.protocol === 'file:' ? ' Opened straight from disk, the browser does not let the page read these files. Run <code>python tools/explorer.py</code> from the repository, or use <b>Choose results folder</b> and pick <code>results/glover37/raw</code>.' : '';
     showStatus(`The results in <code>${source.runFiles ? folderName(source.runFiles) : source.run}</code> could not be read (${e.message}).${hint}`, true);
     document.getElementById('app').hidden = true; return;
   }
