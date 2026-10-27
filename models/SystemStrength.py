@@ -173,14 +173,6 @@ class ESCR(_MetricHistory):
     voltage_tolerance_pu: float = 1e-5
     probe_q_limit_pu: float = 1e6
 
-    def _base_pv_state(self, net, v0):
-        """Generator states (0 PV, +1 at Qmax, -1 at Qmin) of the solved base state."""
-        pf = PowerFlow()
-        v0 = np.asarray(v0, dtype=complex)
-        if pf.solve_power_flow(net, warm_start=(np.angle(v0), np.abs(v0)), controls=False) is None:
-            raise RuntimeError('Base power flow failed while reading generator states for ESCR')
-        return dict(pf.pv_state)
-
     def _solve_voltage_step(self, net, v0, bus, base_state=None):
         """Solve one prescribed voltage step on a disposable network copy.
 
@@ -245,7 +237,9 @@ class ESCR(_MetricHistory):
                       if g in base_state and s != base_state[g]}
         return probe_q_mvar, target_mag, actual_mag, v_new, pv_changes
 
-    def evaluate(self, step, net, v_pf):
+    def evaluate(self, step, net, v_pf, pv_state):
+        """pv_state: generator states (0 PV, +1 at Qmax, -1 at Qmin) of the pre-fault solve
+        that produced v_pf (PowerFlow.pv_state); every probe starts from them."""
         buses = tuple(self.rated_mw)
         z = z_block(net, buses, v_pf=v_pf)
         scmva = {
@@ -259,7 +253,7 @@ class ESCR(_MetricHistory):
         delta_v = {}
         values = {}
         pv_changes = {}
-        base_state = self._base_pv_state(net, v_pf)
+        base_state = dict(pv_state)
 
         for i in buses:
             q_mvar, target_mag, actual_mag, v_new, changes = self._solve_voltage_step(
