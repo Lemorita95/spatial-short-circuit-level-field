@@ -11,10 +11,10 @@
 
   Open it with:   python tools/explorer.py   (serves the repo on localhost and opens this page)
   Query options:  ?run=<folder>      results folder, relative to this page
-                                     (default ../results/glover37/strength/)
+                                     (default ../results/glover37/strength/raw/)
                   ?compare=<folder>  a second run, drawn dotted on the metric chart
   Opened by double-click (file://), browsers do not let the page read the CSVs: use
-  "Choose results folder" and pick results/glover37/strength instead.
+  "Choose results folder" and pick results/glover37/strength/raw instead.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -202,7 +202,7 @@ footer b { color: var(--ink); font-weight: 500 }
 const FILES = ['metrics_timeseries.csv', 'metric_variables.csv', 'run_summary.csv'];
 const OPTIONAL = ['dispatch_schedule.csv'];
 const params = new URLSearchParams(location.search);
-const DEFAULT_RUN = '../results/glover37/strength/';
+const DEFAULT_RUN = '../results/glover37/strength/raw/';
 const source = { run: params.get('run') || DEFAULT_RUN, compare: params.get('compare'), runFiles: null, cmpFiles: null };
 const slash = d => d.replace(/\/?$/, '/');
 

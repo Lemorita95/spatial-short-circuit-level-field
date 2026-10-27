@@ -2,11 +2,17 @@
 
 Run from repository root:
     python -m experiments.glover37.run_strength_metrics --hours 2
-    python -m experiments.glover37.run_strength_metrics --with-outage
+    python -m experiments.glover37.run_strength_metrics \
+        --contingencies results/glover37/strength/raw/contingency_set.csv
+    # intact + line 39-47 only (the v1.0 results, c263896):
+    python -m experiments.glover37.run_strength_metrics \
+        --contingencies results/glover37/strength/raw/contingency_set.csv --case line_39_47_out
 
-Outputs under results/glover37/strength/ by default. `metrics_timeseries.csv`
+Outputs under results/glover37/strength/raw/ by default. `metrics_timeseries.csv`
 contains one row per metric / evaluation bus / time / scenario. `metric_variables.csv`
 records the underlying voltage, SCMVA, impedance, IF, and power terms.
+`z_full_intact.npz` holds the full short-circuit impedance matrix Z = Y_SC^-1 of
+every intact state, for both networks (needed to explain outage effects).
 """
 from __future__ import annotations
 
@@ -19,17 +25,17 @@ import numpy as np
 import pandas as pd
 
 from models.PowerFlow import PowerFlow
-from models.SystemStrength import SCR, WSCR, ESCR, SDSCR
+from models.SystemStrength import SCR, WSCR, ESCR, SDSCR, short_circuit_admittance
 from models.VoltageLimits import PRESETS, VoltageLimits
 from experiments.glover37.state_audit import operating_state_audit
 from experiments.glover37.strength_config import SITES, augment_network
 from experiments.glover37.run_temporal import (
-    GEN_LIMITS_FILE, CONTINGENCY_CASE, ROOT, S_BASE_MVA,
+    GEN_LIMITS_FILE, ROOT, S_BASE_MVA,
     baseline_load_mw, prepare_network, read_gen_limits,
     read_se3, select_week, sequential_dispatch,
 )
 
-DEFAULT_OUTPUT = ROOT / 'results' / 'glover37' / 'strength'
+DEFAULT_OUTPUT = ROOT / 'results' / 'glover37' / 'strength' / 'raw'
 
 
 def solve_pf(network):
@@ -98,21 +104,47 @@ def emit_metric(rows, details, metric_name, record, hour, timestamp, case):
                               value=record['z_rr'][i, j], unit='pu')
 
 
-def evaluate_temporal(week, *, with_outage=False, out_dir=DEFAULT_OUTPUT, voltage_limits=None):
+def read_contingencies(path, cases=None):
+    """[(case label, line key)] for the included rows of contingency_set.csv."""
+    table = pd.read_csv(path)
+    table = table[table['included'].astype(bool)]
+    if cases:
+        if unknown := set(cases) - set(table['case']):
+            raise ValueError(f'Cases not in the included contingency set: {sorted(unknown)}')
+        table = table[table['case'].isin(cases)]
+    return list(zip(table['case'], table['line']))
+
+
+def outage_network(scale, dispatch, limits, line):
+    """prepare_network() with one line out of service (None: intact)."""
+    net = prepare_network(scale, dispatch, limits, False)
+    if line is not None:
+        net.change_element_status(line, False)
+        net.build_ybus()
+    return net
+
+
+def full_z(net, v_pf):
+    '''Z = Y_SC^-1 over every bus, rows/columns in net.idx order.'''
+    return np.linalg.inv(short_circuit_admittance(net, v_pf).toarray())
+
+
+def evaluate_temporal(week, *, contingencies=(), out_dir=DEFAULT_OUTPUT,
+                      voltage_limits=None, if_step=0.01):
     # voltage bands only flag states in run_summary.csv; nothing is corrected
     voltage_limits = voltage_limits or VoltageLimits.preset()
     limits = read_gen_limits(GEN_LIMITS_FILE)
     base_load_mw = baseline_load_mw()
     ibr_mw = sum(site.operating_mw for site in SITES)
-    scenarios = [('intact', False)]
-    if with_outage:
-        scenarios.append((CONTINGENCY_CASE, True))
+    scenarios = [('intact', None)] + [(case, line.lower()) for case, line in contingencies]
+    z_full = {'hour_index': [], 'base': [], 'ibr': [], 'base_buses': None, 'ibr_buses': None}
 
     # One persistent instance per metric: all time steps go into .history.
     metrics = {
         'SCR': SCR({site.poi_bus: site.pmax_mw for site in SITES}),
         'WSCR': WSCR({site.poi_bus: site.operating_mw for site in SITES}),
-        'ESCR': ESCR({site.escr_bus: site.pmax_mw for site in SITES}),
+        'ESCR': ESCR({site.escr_bus: site.pmax_mw for site in SITES},
+                     relative_voltage_step=if_step),
         'SDSCR': SDSCR({site.sdscr_bus: site.operating_mw for site in SITES}),
     }
     results, variables, statuses, dispatch_rows = [], [], [], []
@@ -124,7 +156,7 @@ def evaluate_temporal(week, *, with_outage=False, out_dir=DEFAULT_OUTPUT, voltag
         base_dispatch = sequential_dispatch(demand, limits)
         ibr_dispatch = sequential_dispatch(demand - ibr_mw, limits)
 
-        for case, outage in scenarios:
+        for case, line in scenarios:
             print(f'[{h + 1:03d}/{len(week):03d}] {timestamp} case={case}', flush=True)
             for network_name, dispatch in [('base', base_dispatch), ('ibr', ibr_dispatch)]:
                 for gen in limits:
@@ -136,8 +168,8 @@ def evaluate_temporal(week, *, with_outage=False, out_dir=DEFAULT_OUTPUT, voltag
                         'system_demand_MW': demand,
                         'ibr_injection_MW': ibr_mw if network_name == 'ibr' else 0,
                     })
-            base_net = prepare_network(scale, base_dispatch, limits, outage)
-            aug_net = prepare_network(scale, ibr_dispatch, limits, outage)
+            base_net = outage_network(scale, base_dispatch, limits, line)
+            aug_net = outage_network(scale, ibr_dispatch, limits, line)
             augment_network(aug_net)
             step = f'{case}:{h}'
             state = {
@@ -169,19 +201,24 @@ def evaluate_temporal(week, *, with_outage=False, out_dir=DEFAULT_OUTPUT, voltag
                         emit_metric(results, variables, name, record, h, timestamp, case)
                     except Exception as exc:
                         raise RuntimeError(f'{name}: {exc}') from exc
+                if line is None:
+                    z_full['hour_index'].append(h)
+                    for key, net, voltage in [('base', base_net, base_v), ('ibr', aug_net, aug_v)]:
+                        z_full[key].append(full_z(net, voltage))
+                        z_full[f'{key}_buses'] = sorted(net.idx, key=net.idx.get)
             except Exception as exc:
                 state['error'] = str(exc)
                 statuses.append(state)
                 # Fail visibly; never silently treat missing hours as valid.
-                write_outputs(out_dir, results, variables, statuses, dispatch_rows)
+                write_outputs(out_dir, results, variables, statuses, dispatch_rows, z_full)
                 raise RuntimeError(f'Failed at hour={h}, case={case}: {exc}') from exc
             statuses.append(state)
 
-    write_outputs(out_dir, results, variables, statuses, dispatch_rows)
+    write_outputs(out_dir, results, variables, statuses, dispatch_rows, z_full)
     return metrics
 
 
-def write_outputs(out_dir, results, variables, statuses, dispatch_rows):
+def write_outputs(out_dir, results, variables, statuses, dispatch_rows, z_full=None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(results, columns=['hour_index','timestamp','case','metric','bus','value']).to_csv(
@@ -191,6 +228,11 @@ def write_outputs(out_dir, results, variables, statuses, dispatch_rows):
         out_dir / 'metric_variables.csv', index=False)
     pd.DataFrame(statuses).to_csv(out_dir / 'run_summary.csv', index=False)
     pd.DataFrame(dispatch_rows).to_csv(out_dir / 'dispatch_schedule.csv', index=False)
+    if z_full and z_full['hour_index']:
+        np.savez_compressed(
+            out_dir / 'z_full_intact.npz', hour_index=np.asarray(z_full['hour_index']),
+            base_buses=np.asarray(z_full['base_buses']), ibr_buses=np.asarray(z_full['ibr_buses']),
+            z_base=np.stack(z_full['base']), z_ibr=np.stack(z_full['ibr']))
     # Offline report: embedded data means it works when opened via file://.
     template = Path(__file__).with_name('strength_timeseries_explorer.html')
     if template.is_file():
@@ -208,27 +250,35 @@ def main():
     parser.add_argument('--se3-file', type=Path, default=ROOT / 'data/se3_2025.csv')
     parser.add_argument('--hours', type=int, default=168,
                         help='Run first N hours of the established 168-hour window (smoke test: 2).')
-    parser.add_argument('--with-outage', action='store_true',
-                        help='Also evaluate the established line 39-47 contingency.')
+    parser.add_argument('--contingencies', type=Path,
+                        help='contingency_set.csv: also evaluate every included line outage.')
+    parser.add_argument('--case', action='append', dest='cases',
+                        help='With --contingencies: evaluate only this case label (repeatable).')
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--voltage-preset', default='default', choices=sorted(PRESETS),
                         help='VoltageLimits preset used to flag out-of-band states.')
+    parser.add_argument('--if-step', type=float, default=0.01,
+                        help='ESCR interaction-factor probe: relative MV voltage step (default 0.01).')
     args = parser.parse_args()
     if not 1 <= args.hours <= 168:
         parser.error('--hours must be between 1 and 168')
+    if args.cases and not args.contingencies:
+        parser.error('--case needs --contingencies')
+    contingencies = read_contingencies(args.contingencies, args.cases) if args.contingencies else ()
     week = select_week(read_se3(args.se3_file, 'timestamp', 'SE3')).iloc[:args.hours]
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     temp_output = Path(tempfile.mkdtemp(prefix='.strength-run-', dir=output.parent))
     try:
-        metrics = evaluate_temporal(week, with_outage=args.with_outage, out_dir=temp_output,
-                                    voltage_limits=VoltageLimits.preset(args.voltage_preset))
+        metrics = evaluate_temporal(week, contingencies=contingencies, out_dir=temp_output,
+                                    voltage_limits=VoltageLimits.preset(args.voltage_preset),
+                                    if_step=args.if_step)
         # Replace the published result set only after every requested state has
         # completed successfully. Failed runs leave the previous full result set intact.
         output.mkdir(parents=True, exist_ok=True)
         for filename in (
             'metrics_timeseries.csv', 'metric_variables.csv', 'run_summary.csv',
-            'dispatch_schedule.csv', 'strength_timeseries_explorer.html',
+            'dispatch_schedule.csv', 'z_full_intact.npz', 'strength_timeseries_explorer.html',
         ):
             source = temp_output / filename
             if source.exists():

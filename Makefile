@@ -25,7 +25,11 @@ TEMPORAL_ROOT := $(RESULTS)/temporal
 TEMPORAL_RAW := $(TEMPORAL_ROOT)/raw
 TEMPORAL_ANALYSIS := $(TEMPORAL_ROOT)/analysis
 
-STRENGTH_RESULTS := $(RESULTS)/strength
+STRENGTH_ROOT := $(RESULTS)/strength
+STRENGTH_RAW := $(STRENGTH_ROOT)/raw
+STRENGTH_ANALYSIS := $(STRENGTH_ROOT)/analysis
+# ESCR interaction-factor probe steps for the robustness reruns (results of record: 0.01)
+STRENGTH_IF_STEPS := 0.005 0.02
 
 FIGURES := figures/glover37
 
@@ -50,6 +54,11 @@ REPRODUCE_LOG := $(LOG_DIR)/reproduce.log
 	temporal-analysis \
 	temporal-figures \
 	strength \
+	strength-contingencies \
+	strength-run \
+	strength-if-step \
+	strength-analysis \
+	strength-figures \
 	explorer \
 	test \
 	reproduce \
@@ -63,7 +72,7 @@ help:
 	@echo "  make static              Run, analyze, and plot the static experiment"
 	@echo "  make mechanism           Run, analyze, and plot the mechanism experiment"
 	@echo "  make temporal            Run, analyze, and plot the temporal experiment"
-	@echo "  make strength            Run the 168 h system-strength metrics (intact + outage)"
+	@echo "  make strength            Screen, run, analyze, and plot the 168 h system-strength metrics (intact + N-1)"
 	@echo
 	@echo "Individual stages:"
 	@echo "  make static-run          Generate static raw results"
@@ -76,6 +85,11 @@ help:
 	@echo "  make temporal-run        Generate temporal raw results"
 	@echo "  make temporal-analysis   Analyze existing temporal raw results"
 	@echo "  make temporal-figures    Generate temporal paper figures"
+	@echo "  make strength-contingencies  Screen N-1 line outages (islanding, convergence)"
+	@echo "  make strength-run        Generate system-strength raw results (intact + N-1 set)"
+	@echo "  make strength-if-step    Rerun with other ESCR probe steps (robustness)"
+	@echo "  make strength-analysis   Analyze existing system-strength raw results"
+	@echo "  make strength-figures    Generate system-strength figures"
 	@echo
 	@echo "Other:"
 	@echo "  make explorer            Open the strength results explorer (Ctrl-C to stop)"
@@ -192,20 +206,57 @@ temporal-figures:
 
 # -----------------------------------------------------------------------------
 # System-strength metrics experiment (SCR, WSCR, ESCR, SDSCR)
-# run -> results/glover37/strength/
+# screen -> results/glover37/strength/raw/contingency_set.csv
+# run -> results/glover37/strength/raw/ (and raw_if_step_<step>/ for the robustness reruns)
+# analyze -> results/glover37/strength/analysis/
+# plot -> figures/glover37/
 # -----------------------------------------------------------------------------
 
 strength:
+	$(MAKE) strength-contingencies
+	$(MAKE) strength-run
+	$(MAKE) strength-if-step
+	$(MAKE) strength-analysis
+	$(MAKE) strength-figures
+
+
+strength-contingencies:
+	$(PYTHON) -m experiments.glover37.screen_contingencies \
+		--output $(STRENGTH_RAW)/contingency_set.csv
+
+
+strength-run:
 	$(PYTHON) -m experiments.glover37.run_strength_metrics \
-		--with-outage \
+		--contingencies $(STRENGTH_RAW)/contingency_set.csv \
 		--voltage-preset $(VOLTAGE_PRESET) \
-		--output $(STRENGTH_RESULTS)
+		--output $(STRENGTH_RAW)
+
+
+strength-if-step:
+	for step in $(STRENGTH_IF_STEPS); do \
+		$(PYTHON) -m experiments.glover37.run_strength_metrics \
+			--contingencies $(STRENGTH_RAW)/contingency_set.csv \
+			--voltage-preset $(VOLTAGE_PRESET) \
+			--if-step $$step \
+			--output $(STRENGTH_ROOT)/raw_if_step_$$step || exit 1; \
+	done
+
+
+strength-analysis:
+	$(PYTHON) -m experiments.glover37.analyze_strength_metrics \
+		--input-dir $(STRENGTH_RAW) \
+		--output-dir $(STRENGTH_ANALYSIS) \
+		$(foreach step,$(STRENGTH_IF_STEPS),--if-step-run $(STRENGTH_ROOT)/raw_if_step_$(step))
+
+
+strength-figures:
+	$(PYTHON) -m experiments.glover37.plot_strength_metrics
 
 
 # -----------------------------------------------------------------------------
 # Results explorer
 # tools/explorer.py serves the repository on localhost and opens tools/explorer.html,
-# which reads results/glover37/strength/ at runtime.
+# which reads results/glover37/strength/raw/ at runtime.
 # -----------------------------------------------------------------------------
 
 explorer:

@@ -26,7 +26,7 @@ make test
 make explorer
 ```
 
-`make explorer` serves the repository on localhost and opens [`tools/explorer.html`](tools/explorer.html), which reads `results/glover37/strength/` each time it loads (stop with Ctrl-C).
+`make explorer` serves the repository on localhost and opens [`tools/explorer.html`](tools/explorer.html), which reads `results/glover37/strength/raw/` each time it loads (stop with Ctrl-C).
 
 Two variables can be set on any target: `PYTHON` (for example `PYTHON=.venv/bin/python`) and `VOLTAGE_PRESET`, which selects the voltage band used to flag out-of-band operating states. See the [`Makefile`](Makefile) for individual run / analyze / plot stages.
 
