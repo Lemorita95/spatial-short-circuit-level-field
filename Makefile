@@ -12,26 +12,23 @@ RESULTS := results/glover37
 RAW := $(RESULTS)/raw
 ANALYSIS := $(RESULTS)/analysis
 CONTINGENCIES := $(RAW)/contingency_set.csv
-# ESCR interaction-factor probe steps for the robustness reruns (results of record: 0.01)
-IF_STEPS := 0.005 0.02
 
 FIGURES := figures/glover37
 
 
-.PHONY: help case strength validate screen simulate simulate-if-step analyze report layout \
+.PHONY: help case strength validate screen simulate analyze report layout \
 	explorer test clean
 
 
 help:
 	@echo "System-strength metrics study (SCR, WSCR, ESCR, SDSCR), Glover 37-bus"
 	@echo
-	@echo "  make strength          validate -> screen -> simulate -> analyze -> report (about 35 min)"
+	@echo "  make strength          validate -> screen -> simulate -> analyze -> report (about 8 min)"
 	@echo
 	@echo "Stages:"
 	@echo "  make validate          E0: PowerWorld agreement, base + A1-A3, B1-B3"
 	@echo "  make screen            Fix the N-1 line set (islanding, convergence)"
-	@echo "  make simulate          168 h metrics run: intact + every included outage"
-	@echo "  make simulate-if-step  Reruns with the other ESCR probe steps ($(IF_STEPS))"
+	@echo "  make simulate          168 h metrics run: every state (E1, E2, E5), every ESCR MIIF variant"
 	@echo "  make analyze           Gate 4 v2 analysis of the existing raw results"
 	@echo "  make report            Figures from the existing analysis"
 	@echo "  make layout            Network one-line diagram"
@@ -57,7 +54,6 @@ strength:
 	$(MAKE) validate
 	$(MAKE) screen
 	$(MAKE) simulate
-	$(MAKE) simulate-if-step
 	$(MAKE) analyze
 	$(MAKE) report
 
@@ -77,21 +73,10 @@ simulate:
 		--output $(RAW)
 
 
-simulate-if-step:
-	for step in $(IF_STEPS); do \
-		$(PYTHON) -m experiments.glover37.simulate run \
-			--contingencies $(CONTINGENCIES) \
-			--voltage-preset $(VOLTAGE_PRESET) \
-			--if-step $$step \
-			--output $(RESULTS)/raw_if_step_$$step || exit 1; \
-	done
-
-
 analyze:
 	$(PYTHON) -m experiments.glover37.analyze \
 		--input-dir $(RAW) \
-		--output-dir $(ANALYSIS) \
-		$(foreach step,$(IF_STEPS),--if-step-run $(RESULTS)/raw_if_step_$(step))
+		--output-dir $(ANALYSIS)
 
 
 report:

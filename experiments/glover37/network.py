@@ -19,8 +19,9 @@ from models.FullConverter import FullConverter
 from models.Lines import Line
 from models.Transformers import Transformer
 from experiments.glover37.config import (
-    CASE_FILE, FEEDER_B_SYSTEM_BASE, FEEDER_Z_SYSTEM_BASE, LV_KV, MV_KV, S_BASE_MVA,
-    SE3_LOAD_COLUMN, SE3_TIMESTAMP_COLUMN, SITES, SLACK_BUS, WINDOW_HOURS, YEAR,
+    ALL_ONLINE, CASE_FILE, CONVERTER_FAULT_MODEL, FEEDER_B_SYSTEM_BASE, FEEDER_Z_SYSTEM_BASE,
+    LV_KV, MV_KV, S_BASE_MVA, SE3_LOAD_COLUMN, SE3_TIMESTAMP_COLUMN, SEQUENTIAL, SITES,
+    SLACK_BUS, WINDOW_HOURS, YEAR,
 )
 
 
@@ -190,6 +191,40 @@ def sequential_dispatch(target_load_mw: float, limits: list[GenLimit]) -> dict[s
     return dispatch
 
 
+def all_online_dispatch(target_load_mw: float, limits: list[GenLimit]) -> dict[str, float]:
+    """
+    Rule (a): every non-slack generator at max(MWMin, s * MWMax), s in [0, 1] chosen so
+    the units meet the target. The sum is continuous and non-decreasing in s, so s is
+    found by bisection. With s = 0 (MWMin alone exceeds the target) the slack exports;
+    with s = 1 (MWMax exhausted) the slack supplies the remainder.
+    """
+    def total(s):
+        return sum(max(g.mw_min, s * g.mw_max) for g in limits)
+
+    target = float(target_load_mw)
+    if total(0.0) >= target:
+        s = 0.0
+    elif total(1.0) <= target:
+        s = 1.0
+    else:
+        lo, hi = 0.0, 1.0
+        for _ in range(100):
+            mid = 0.5 * (lo + hi)
+            lo, hi = (mid, hi) if total(mid) < target else (lo, mid)
+        s = 0.5 * (lo + hi)
+    return {g.key: max(g.mw_min, s * g.mw_max) for g in limits}
+
+
+def schedule(rule, target_load_mw, limits):
+    """(dispatch MW, committed) per generator key under a commitment rule (config)."""
+    if rule == SEQUENTIAL:
+        dispatch = sequential_dispatch(target_load_mw, limits)
+        return dispatch, {k: p > 0 for k, p in dispatch.items()}
+    if rule == ALL_ONLINE:
+        return all_online_dispatch(target_load_mw, limits), {g.key: True for g in limits}
+    raise ValueError(f"Unknown commitment rule: {rule!r}")
+
+
 def baseline_load_mw() -> float:
     net = CustomNetwork(str(CASE_FILE))
     net.create_network()
@@ -200,9 +235,9 @@ def baseline_load_mw() -> float:
 # 3. One quasi-static operating state
 # =============================================================================
 
-def prepare_network(load_scale, dispatch, limits, contingency=None):
+def prepare_network(load_scale, dispatch, limits, contingency=None, committed=None):
     """Load-scaled, dispatched 37-bus network with the `contingency` line out of service
-    (None: intact)."""
+    (None: intact). `committed` (generator key -> bool) defaults to dispatch > 0."""
     net = CustomNetwork(str(CASE_FILE))
     net.create_network()
 
@@ -215,9 +250,10 @@ def prepare_network(load_scale, dispatch, limits, contingency=None):
             raise KeyError(f"{g.key} not found in glover37.json")
 
         p_mw = dispatch[g.key]
-        net.change_element_status(g.key, p_mw > 0)
+        online = p_mw > 0 if committed is None else bool(committed[g.key])
+        net.change_element_status(g.key, online)
 
-        if p_mw > 0:
+        if online:
             net.generators[g.key].P = p_mw / S_BASE_MVA
 
     # Slack generator is deliberately untouched:
@@ -273,7 +309,7 @@ def augment_network(net):
         net.full_converters[converter] = FullConverter(
             name=converter, bus_1=site.converter_lv_bus,
             kVA_nominal=site.converter_mva * 1000.0, cos_phi=1.0, kV_nominal=LV_KV,
-            P=site.operating_mw / S_BASE_MVA, Q=0.0,
+            P=site.pmax_mw / S_BASE_MVA, Q=0.0, fault_model=CONVERTER_FAULT_MODEL,
         )
 
     net.build_ybus()

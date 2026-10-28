@@ -38,6 +38,7 @@ import pandas as pd
 from models.CustomNetwork import CustomNetwork
 from models.PowerFlow import PowerFlow
 from models.ShortCircuit import ShortCircuit as SC
+from experiments.glover37 import manifest
 from experiments.glover37.config import (
     CASE_FILE, E0_SCENARIOS, E0_STATES, POWERWORLD_ROOT, S_BASE_MVA, VALIDATION_DIR, Action,
 )
@@ -100,9 +101,8 @@ def solve_state(state: str) -> list[list]:
 
     failed = []
     for row, bus in zip(case_data, network.buses.keys()):
-        try:
-            i_scc = SC.SCC_NR(network.idx[bus], v_complex, passive_ybus, active_elements)
-        except RuntimeError:
+        i_scc = SC.SCC_NR(network.idx[bus], v_complex, passive_ybus, active_elements)
+        if i_scc is None:
             failed.append(bus)
             row.extend([None, None, None, None])
             continue
@@ -468,10 +468,15 @@ def validate_all() -> None:
 
 
 def main() -> None:
+    started = manifest.now()
     for state in E0_STATES:
         print(f"Solving {state}")
         save_state(state, solve_state(state))
     validate_all()
+    manifest.write(
+        VALIDATION_DIR, "validate", started=started,
+        inputs=[CASE_FILE] + [POWERWORLD_ROOT / s / "shortcircuit.csv" for s in E0_STATES],
+        outputs=sorted(VALIDATION_DIR.rglob("*.csv")))
 
 
 if __name__ == "__main__":

@@ -173,6 +173,9 @@ class ShortCircuit:
             Y_SCC -> csc sparse: contain all impedances. passive network, generators equivalent and load equivalents
             lin_sources: contains the linear sources elements, i.e. synchronous generators
             nonlin_sources: contains the non linear sources elements, i.e. full converters
+
+            Returns None if the iteration does not converge, like PowerFlow.solve_power_flow;
+            the caller decides how to report it.
         '''
         convergence = False
 
@@ -217,12 +220,9 @@ class ShortCircuit:
             iteration += 1
 
         if not convergence:
-            print(f'\t\t\t> short circuit calculation did not converged in {max_iter} iterations for fault in bus {fault_bus_idx}')
-            results = np.column_stack(residuals)
-            import matplotlib.pyplot as plt
-            plt.plot(np.abs(results).T)
-            plt.show()
-            raise RuntimeError("Short circuit did not converged. Interrupting simulation.")
+            print(f'\t\t\t> short circuit calculation did not converge in {max_iter} iterations '
+                  f'for fault at bus index {fault_bus_idx} (last max |residual| {max(abs(f)):.3e})')
+            return None
 
         i_fault = V_fault[fault_bus_idx] / zf
 
@@ -243,18 +243,3 @@ class ShortCircuit:
             }
 
         return i_fault
-
-    @staticmethod
-    def compute_dIdV(nonlinear_sources, V, ThetaV, dV=1e-6):
-        '''
-            numerical computation of the jacobian. for voltage dependent sources
-            V: complex value of voltage under fault condition
-            ThetaV: complex value of voltage before fault
-        '''
-        dI = {}
-        for (_, bus_idx), (src, S_src) in nonlinear_sources.items():
-            f0 = src.get_I(V[bus_idx], ThetaV[bus_idx], S_src)
-            f1 = src.get_I(V[bus_idx] + dV, ThetaV[bus_idx], S_src)
-            dI[bus_idx] = dI.get(bus_idx, 0) + (f1 - f0) / dV
-            
-        return dI

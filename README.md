@@ -9,13 +9,12 @@ pip install -r requirements.txt
 make strength
 ```
 
-`make strength` runs the stages in order (about 35 min); each is also a target of its own:
+`make strength` runs the stages in order (about 8 min); each is also a target of its own:
 
 ```bash
 make validate          # E0: PowerWorld agreement
 make screen            # N-1 line set
-make simulate          # 168 h metrics run, intact + outages
-make simulate-if-step  # ESCR probe-step reruns
+make simulate          # 168 h metrics run: every state and ESCR MIIF variant
 make analyze
 make report
 ```

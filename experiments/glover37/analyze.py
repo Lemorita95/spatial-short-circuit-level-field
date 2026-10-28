@@ -4,20 +4,23 @@ Analyze the system-strength metrics experiment: Gate 4, evidence plan v2.
 Plan: current_research_handoff/05_GATE3.5_LITERATURE_EXTRACTION.md, Part E.
 Every claim is an observation, a mechanism (the formula term responsible) and a
 confirmation: that term is isolated, and the effect must disappear or be
-accounted for. No network, power-flow or short-circuit calculation is performed,
-except the topology-only update of the stored intact Z (D4).
+accounted for. No network, power-flow or short-circuit calculation is performed.
 
-Common basis (file 02 §4), Z = Y_SC^-1, SCMVA_i = 100 |V_i| / |Z_ii|:
+Inputs: the sequential-commitment states (E1, E2) of results/glover37/raw/. ESCR is
+read with its reference MIIF (config REFERENCE_VARIANT); the IF-step check reads the
+probe variants of the same run. All denominators are rated MW.
+
+Common basis: SCMVA_i from the short-circuit solver, Z = Y_SCC^-1 from its builder:
 
     SCR_i   = SCMVA_i / P_i                          37-bus, 69 kV POI
     WSCR    = Σ SCMVA_i P_i / (Σ P_i)²               37-bus, 69 kV POI
-    ESCR_i  = SCMVA_i / (P_i + Σ IF_ji P_j)          46-bus, 34.5 kV MV
+    ESCR_i  = SCMVA_i / (P_i + Σ MIIF_ji P_j)        46-bus, 34.5 kV MV
     SDSCR_i = |V_i|² / (|Z_ii| |P_i + Σ w_ij P_j|)   46-bus, 0.69 kV LV
 
 Isolating terms. Each metric m is recomputed from its recorded terms as
 
-    m_noV   |V| = 1 pu, coupling kept
-    m_noC   coupling removed (IF = 0, w = 0), |V| kept
+    m_noV   |V| = 1 pu: SCMVA replaced by 100 / |Z_ii|, coupling kept
+    m_noC   coupling removed (MIIF = 0, w = 0), |V| kept
     m_Z     both removed: Z_ii only
 
 so a change in ln m between two states (hours or scenarios) splits exactly into
@@ -25,18 +28,9 @@ so a change in ln m between two states (hours or scenarios) splits exactly into
     Δln m = (Δln m - Δln m_noV) + (Δln m_noV - Δln m_Z) + Δln m_Z
              |V| part              coupling part           Z_ii part
 
-SCR and WSCR have no coupling term (m_noC = m, m_noV = m_Z).
-
-D4 topology. Removing line a-b adds ΔY = U C U^T to Y_SC (U = [e_a, e_b],
-C = minus the line's π stamp). Its effect on the intact Z is exact (Woodbury):
-
-    Z' = Z - Z U (I + C U^T Z U)^-1 C U^T Z
-
-This is the topology-only outage effect; the rest of the actual change comes
-from load admittances at the changed voltages. It splits into two opposing parts:
-removing the series branch raises |Z_ii|; removing the charging shunts (B/2 at
-each end, capacitive) lowers it, since jX in parallel with jB gives jX/(1 - XB).
-The series part is computed with the series branch alone; the shunt part is the rest.
+For SCR, WSCR and ESCR the |V| part is ln(SCMVA |Z_ii| / 100) = ln|V| plus the
+solver's fault-impedance term (about 1e-5). SCR and WSCR have no coupling term
+(m_noC = m, m_noV = m_Z).
 
 Coupling load, the interaction a site carries relative to its own power:
     ESCR  k_i = Σ IF_ji P_j / P_i          SDSCR  k_i = |P_i + Σ w_ij P_j| / P_i - 1
@@ -47,19 +41,19 @@ Claims (Part E §4) and tables
 -----------------------------
 D1/RQ2  The weakest hour is a minimum-commitment hour (B_count); exceptions are
         traced to |V| or coupling                       -> d1_weakest_hour
-D4      In network terms an outage weakens a site or leaves it practically
-        unaffected; the topology-only ΔZ_ii explains the change  -> d4_outage
+D4      In network terms (Z_ii only) an outage weakens a site or leaves it
+        practically unaffected                          -> d4_outage
 D4      Measured per hour, contingency and site: metric_contingency > metric_intact
         ("stronger"). The coupling metrics are stronger when the outage decouples
         the sites (coupling load k falls)                -> d4_outage
         r per hour, corridor, metric and site (histograms)  -> d4_hourly
 D5      The light-load snapshot almost finds the weekly minimum
                                                          -> d5_snapshots, d5_dispatch
-A3      Rated, output and MVA denominators change no conclusion
+A3      Rated and MVA denominators change no conclusion
                                                          -> a3_denominators
 check   Parallel circuits agree with circuit 1          -> parallel_circuits
-check   ESCR conclusions under other IF probe steps (Gate 3 limitation 2;
-        with --if-step-run)                              -> if_step_robustness
+check   ESCR conclusions under the probe MIIF variants (E3)
+                                                         -> miif_variants
 summary.csv: one line per result, traced to its claim.
 
 Scenarios: intact plus one outage per corridor; circuit 1 represents a corridor
@@ -69,33 +63,30 @@ Usage
 -----
     python -m experiments.glover37.analyze
     python -m experiments.glover37.analyze \
-        --input-dir results/glover37/raw \
-        --output-dir results/glover37/analysis \
-        --if-step-run results/glover37/raw_if_step_0.005 \
-        --if-step-run results/glover37/raw_if_step_0.02
+        --input-dir results/glover37/raw --output-dir results/glover37/analysis
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
-import io
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from experiments.glover37 import manifest
 from experiments.glover37.config import (
-    ANALYSIS_DIR, AS_RUN, EVAL_BUS, GEN_LIMITS_FILE, IF_ZERO, INTACT, METRICS, NETWORK, RAW_DIR,
-    RECONSTRUCTION_TOL, REL_TIE, S_BASE_MVA, SITES,
+    ANALYSIS_DIR, AS_RUN, EVAL_BUS, IF_ZERO, INTACT, METRICS, NETWORK, PROBE_VARIANTS, RAW_DIR,
+    RECONSTRUCTION_TOL, REFERENCE_VARIANT, REL_TIE, S_BASE_MVA, SEQUENTIAL, SITES,
 )
-from experiments.glover37.network import prepare_network, read_gen_limits, sequential_dispatch
 
 DEFAULT_INPUT = RAW_DIR
 DEFAULT_OUTPUT = ANALYSIS_DIR
 INPUT_FILES = ("metrics_timeseries.csv", "metric_variables.csv", "run_summary.csv",
-               "dispatch_schedule.csv", "contingency_set.csv", "z_full_intact.npz")
+               "dispatch_schedule.csv", "contingency_set.csv")
+# ESCR terms written once per state, with the reference variant
+SHARED_ESCR_TERMS = ("scmva", "rated_mw", "z_ii", "v_pf")
 
 SITE_IDS = tuple(str(s.host_bus) for s in SITES)
 GROUP = "group"
@@ -105,7 +96,6 @@ VARIANTS = ("m", "noV", "noC", "Z")
 N_COMMITTED_COLUMN = {"base": "base_n_committed", "ibr": "ibr_case_n_committed"}
 P_MW = {
     "rated": {str(s.host_bus): s.pmax_mw for s in SITES},
-    "output": {str(s.host_bus): s.operating_mw for s in SITES},
     "mva": {str(s.host_bus): s.converter_mva for s in SITES},
 }
 
@@ -127,31 +117,51 @@ def _join(items):
     return ";".join(str(x) for x in items)
 
 
-def load_inputs(input_dir, reference=None):
-    """A run's files. An IF-step rerun (reference given) reuses the reference run's
-    contingency set and intact Z, so it needs only the four files the runner writes."""
+def read_run(input_dir):
+    """The raw files of one simulate run, every commitment rule and ESCR variant."""
     d = Path(input_dir)
-    files = INPUT_FILES if reference is None else INPUT_FILES[:4]
-    if missing := [f for f in files if not (d / f).is_file()]:
+    if missing := [f for f in INPUT_FILES if not (d / f).is_file()]:
         raise FileNotFoundError(f"Missing inputs in {d}: {missing}")
-    metrics = pd.read_csv(d / "metrics_timeseries.csv", dtype={"bus": str})
+    metrics = pd.read_csv(d / "metrics_timeseries.csv", dtype={"bus": str, "variant": str},
+                          keep_default_na=False, na_values={"value": [""]})
     metrics["bus"] = metrics["bus"].map(_bus_id)
-    variables = pd.read_csv(d / "metric_variables.csv", dtype={"bus": str, "related_bus": str})
+    variables = pd.read_csv(d / "metric_variables.csv",
+                            dtype={"bus": str, "related_bus": str, "variant": str},
+                            keep_default_na=False, na_values={c: [""] for c in ("real", "imag", "magnitude")})
     variables["bus"] = variables["bus"].map(_bus_id)
-    variables["related_bus"] = variables["related_bus"].map(_bus_id)
-    if reference is None:
-        z = np.load(d / "z_full_intact.npz")
-        contingencies, z = pd.read_csv(d / "contingency_set.csv"), {k: z[k] for k in z.files}
-    else:
-        contingencies, z = reference["contingencies"], reference["z"]
+    variables["related_bus"] = variables["related_bus"].replace("", np.nan).map(_bus_id)
     return {
-        "metrics": metrics,
-        "variables": dict(tuple(variables.groupby(["metric", "variable"]))),
+        "metrics": metrics, "variables": variables,
         "summary": pd.read_csv(d / "run_summary.csv"),
         "dispatch": pd.read_csv(d / "dispatch_schedule.csv"),
-        "contingencies": contingencies,
-        "z": z,
-        "sha256": {f: hashlib.sha256((d / f).read_bytes()).hexdigest() for f in files},
+        "contingencies": pd.read_csv(d / "contingency_set.csv"),
+        "sha256": {f: hashlib.sha256((d / f).read_bytes()).hexdigest() for f in INPUT_FILES},
+        "manifest": manifest.read(d),
+    }
+
+
+def view(run, variant=REFERENCE_VARIANT):
+    """The sequential-commitment states (E1, E2) with ESCR read through one MIIF variant;
+    the ESCR terms shared by every variant come from the reference rows."""
+    def sequential(frame):
+        return frame[frame["commitment"] == SEQUENTIAL].drop(columns="commitment")
+
+    metrics = sequential(run["metrics"])
+    metrics = metrics[metrics["variant"].isin(("", variant))].drop(columns="variant")
+    variables = sequential(run["variables"])
+    escr = variables["metric"] == "ESCR"
+    own = variables["variant"] == variant
+    shared = (variables["variant"] == REFERENCE_VARIANT) & variables["variable"].isin(SHARED_ESCR_TERMS)
+    variables = variables[~escr | own & ~variables["variable"].isin(SHARED_ESCR_TERMS) | shared]
+    variables = variables.drop(columns="variant")
+    return {
+        "metrics": metrics.reset_index(drop=True),
+        "variables": dict(tuple(variables.groupby(["metric", "variable"]))),
+        "summary": sequential(run["summary"]).reset_index(drop=True),
+        "dispatch": sequential(run["dispatch"]).reset_index(drop=True),
+        "contingencies": run["contingencies"],
+        "sha256": run["sha256"],
+        "variant": variant,
     }
 
 
@@ -191,8 +201,6 @@ def check_inputs(data):
     for column in N_COMMITTED_COLUMN.values():
         if summary.groupby("hour_index")[column].nunique().max() > 1:
             raise ValueError(f"{column}: commitment differs between scenarios")
-    if sorted(data["z"]["hour_index"]) != hours:
-        raise ValueError("z_full_intact.npz hours differ from run_summary.csv")
     return np.asarray(hours, dtype=int), cases
 
 
@@ -225,31 +233,31 @@ def variant_values(groups, p_mw):
     out = {v: {} for v in VARIANTS}
 
     p = pd.Series(p_mw["SCR"])[list(SITE_IDS)]
-    v_abs = _by_site(_wide(groups, "SCR", "v_pf", "complex"), "SCR").abs()
+    scmva = _by_site(_wide(groups, "SCR", "scmva"), "SCR")
     z_abs = _by_site(_wide(groups, "SCR", "z_ii", "complex"), "SCR").abs()
-    out["m"]["SCR"] = out["noC"]["SCR"] = S_BASE_MVA * v_abs / z_abs / p
+    out["m"]["SCR"] = out["noC"]["SCR"] = scmva / p
     out["noV"]["SCR"] = out["Z"]["SCR"] = S_BASE_MVA / z_abs / p
 
     p = pd.Series(p_mw["WSCR"])[list(SITE_IDS)]
+    scmva = _by_site(_wide(groups, "WSCR", "scmva"), "WSCR")
     z_abs = _by_site(_wide(groups, "WSCR", "z_ii", "complex"), "WSCR").abs()
-    v_abs = _by_site(_wide(groups, "WSCR", "scmva"), "WSCR") * z_abs / S_BASE_MVA
 
-    def wscr(v):
-        return (S_BASE_MVA * v / z_abs * p).sum(axis=1).to_frame(GROUP) / p.sum() ** 2
-    out["m"]["WSCR"] = out["noC"]["WSCR"] = wscr(v_abs)
-    out["noV"]["WSCR"] = out["Z"]["WSCR"] = wscr(1.0)
+    def wscr(sc):
+        return (sc * p).sum(axis=1).to_frame(GROUP) / p.sum() ** 2
+    out["m"]["WSCR"] = out["noC"]["WSCR"] = wscr(scmva)
+    out["noV"]["WSCR"] = out["Z"]["WSCR"] = wscr(S_BASE_MVA / z_abs)
 
     p = p_mw["ESCR"]
-    v_abs = _by_site(_wide(groups, "ESCR", "v_pf", "complex"), "ESCR").abs()
+    scmva = _by_site(_wide(groups, "ESCR", "scmva"), "ESCR")
     z_abs = _by_site(_wide(groups, "ESCR", "z_ii", "complex"), "ESCR").abs()
     interaction = _wide(groups, "ESCR", "if_magnitude", pair=True)  # columns (j, i): IF_ji
     bus = EVAL_BUS["ESCR"]
     den = pd.DataFrame({i: p[i] + sum(interaction[(bus[j], bus[i])] * p[j]
                                       for j in SITE_IDS if j != i) for i in SITE_IDS})
     p_own = pd.Series(p)[list(SITE_IDS)]
-    out["m"]["ESCR"] = S_BASE_MVA * v_abs / z_abs / den
+    out["m"]["ESCR"] = scmva / den
     out["noV"]["ESCR"] = S_BASE_MVA / z_abs / den
-    out["noC"]["ESCR"] = S_BASE_MVA * v_abs / z_abs / p_own
+    out["noC"]["ESCR"] = scmva / p_own
     out["Z"]["ESCR"] = S_BASE_MVA / z_abs / p_own
 
     p = {s: mw / S_BASE_MVA for s, mw in p_mw["SDSCR"].items()}
@@ -312,7 +320,7 @@ def split(values, metric, site, frm, to):
 
 
 # =============================================================================
-# 3. Context: load scale, commitment, IF ≈ 0 states, topology-only outage Z
+# 3. Context: load scale, commitment, IF ≈ 0 states
 # =============================================================================
 
 def lowest(s, k):
@@ -340,67 +348,6 @@ def build_context(data, hours):
     if_max = _wide(data["variables"], "ESCR", "if_magnitude", pair=True).max(axis=1)
     return {"hours": hours, "load_scale": intact["load_scale"], "n_committed": n_committed,
             "b_count": b_count, "if_zero": if_max < IF_ZERO}
-
-
-def branch_update(contingencies, corridors):
-    """{case: (bus_a, bus_b, C)} with C = minus the line's π stamp (2x2)."""
-    limits = read_gen_limits(GEN_LIMITS_FILE)
-    with contextlib.redirect_stdout(io.StringIO()):
-        net = prepare_network(1.0, sequential_dispatch(0.0, limits), limits)
-    out = {}
-    for row in contingencies[contingencies["case"].isin(corridors)].itertuples():
-        line = net.lines[row.line]
-        y, ys = 1 / line.Z_series, line.Y_shunt
-        out[row.case] = (line.bus_1, line.bus_2,
-                         -np.array([[y + ys / 2, -y], [-y, y + ys / 2]], dtype=complex))
-    return out
-
-
-def topology_z_ii(z, network, eval_buses, bus_a, bus_b, c):
-    """|Z'_ii| (hours x buses) after the branch update, from the intact Z of every hour."""
-    buses = [int(b) for b in z[f"{network}_buses"]]
-    order = np.argsort(z["hour_index"])
-    zz = z[f"z_{network}"][order]
-    u = [buses.index(bus_a), buses.index(bus_b)]
-    r = [buses.index(b) for b in eval_buses]
-    z_uu = zz[:, u][:, :, u]
-    z_ru = zz[:, r][:, :, u]
-    z_ur = zz[:, u][:, :, r]
-    m = np.eye(2) + c @ z_uu
-    dz = z_ru @ np.linalg.solve(m, c @ z_ur)
-    z_rr = zz[:, r][:, :, r]
-    return np.abs(np.diagonal(z_rr - dz, axis1=1, axis2=2)), np.abs(np.diagonal(z_rr, axis1=1, axis2=2))
-
-
-def series_only(c):
-    """The update for the line's series branch alone (charging shunts kept in service)."""
-    y = c[0, 1]  # C = minus the π stamp, whose off-diagonal is -y
-    return -np.array([[y, -y], [-y, y]], dtype=complex)
-
-
-def topology_parts(data, corridors, ctx):
-    """{(case, metric, site): DataFrame over hours} of the topology-only Δln m_Z:
-    'full' (series branch and charging shunts removed) and 'series' (series branch only).
-    The shunt part is full - series: removing a capacitive shunt lowers |Z_ii|."""
-    updates = branch_update(data["contingencies"], corridors)
-    hours = ctx["hours"]
-    output = pd.Series(P_MW["output"])[list(SITE_IDS)].to_numpy()
-    out = {}
-    for case, (a, b, c) in updates.items():
-        for metric in METRICS:
-            buses = [EVAL_BUS[metric][s] for s in SITE_IDS]
-            parts = {}
-            for name, update in (("full", c), ("series", series_only(c))):
-                z_out, z_int = topology_z_ii(data["z"], NETWORK[metric], buses, a, b, update)
-                if metric == "WSCR":
-                    ratio = (output / z_out).sum(axis=1) / (output / z_int).sum(axis=1)
-                    parts[name] = {GROUP: np.log(ratio)}
-                else:
-                    parts[name] = {s: np.log(z_int[:, k] / z_out[:, k]) for k, s in enumerate(SITE_IDS)}
-            for site in parts["full"]:
-                out[case, metric, site] = pd.DataFrame(
-                    {name: parts[name][site] for name in parts}, index=hours)
-    return out
 
 
 # =============================================================================
@@ -445,7 +392,7 @@ def d1_weakest_hour(values, ctx, cases):
     return pd.DataFrame(rows)
 
 
-def d4_outage(values, ctx, corridors, topology):
+def d4_outage(values, ctx, corridors):
     rows = []
     if_zero = ctx["if_zero"]
     for case in corridors:
@@ -453,8 +400,6 @@ def d4_outage(values, ctx, corridors, topology):
             ln = {v: np.log(series(values, v, metric, site, case)
                             / series(values, v, metric, site, INTACT)) for v in VARIANTS}
             part_v, part_c, part_z = ln["m"] - ln["noV"], ln["noV"] - ln["Z"], ln["Z"]
-            topo = topology[case, metric, site]["full"]
-            topo_series = topology[case, metric, site]["series"]
             # stronger: metric_contingency > metric_intact in that hour
             stronger = sign0(ln["m"]) > 0
             if_out = if_zero.xs(case, level="case").reindex(ln["m"].index).to_numpy()
@@ -468,16 +413,10 @@ def d4_outage(values, ctx, corridors, topology):
                 "share_hours_stronger_coupling_removed": float((sign0(ln["noC"]) > 0).mean()),
                 "share_hours_stronger_Z_ii_only": float((sign0(ln["Z"]) > 0).mean()),
                 "max_r_Z_ii_only": float(np.expm1(ln["Z"]).max()),
-                "share_hours_stronger_topology": float((sign0(topo) > 0).mean()),
-                "share_hours_stronger_topology_series": float((sign0(topo_series) > 0).mean()),
                 "median_dln_total": float(ln["m"].median()),
                 "median_dln_V": float(part_v.median()),
                 "median_dln_coupling": float(part_c.median()),
                 "median_dln_Z_ii": float(part_z.median()),
-                "median_dln_Z_ii_topology": float(topo.median()),
-                "median_dln_Z_ii_topology_series": float(topo_series.median()),
-                "median_dln_Z_ii_topology_shunt": float((topo - topo_series).median()),
-                "max_abs_Z_ii_minus_topology": float((part_z - topo).abs().max()),
                 "median_coupling_load_intact": float(k_int.median()),
                 "median_coupling_load_outage": float(k_out.median()),
                 "n_hours_stronger": int(stronger.sum()),
@@ -535,10 +474,10 @@ def d4_hourly(values, corridors):
     return pd.concat(frames, ignore_index=True)
 
 
-def core_tables(values, ctx, cases, corridors, topology):
+def core_tables(values, ctx, cases, corridors):
     return {
         "d1_weakest_hour": d1_weakest_hour(values, ctx, cases),
-        "d4_outage": d4_outage(values, ctx, corridors, topology),
+        "d4_outage": d4_outage(values, ctx, corridors),
         "d4_hourly": d4_hourly(values, corridors),
         "d5_snapshots": d5_snapshots(values, ctx, cases),
     }
@@ -565,21 +504,14 @@ def compare_tables(reference, other, rtol=1e-9):
     return pd.DataFrame(rows)
 
 
-def infer_if_step(groups):
-    """The ESCR probe's relative MV voltage step, from the recorded target voltages."""
-    target = _wide(groups, "ESCR", "target_voltage_pu")
-    v = _wide(groups, "ESCR", "v_pf", "complex").abs()
-    return round(float(np.median((target / v - 1).to_numpy())), 6)
-
-
-def if_step_robustness(runs, cases, corridors):
-    """Gate 3 limitation 2: ESCR conclusions under other IF probe steps.
-    runs: [(step, values)], the first is the results of record."""
+def miif_variants(runs, cases, corridors):
+    """E3: ESCR conclusions under each MIIF variant.
+    runs: [(variant, values)], the first is the reference variant."""
     rows = []
-    for step, values in runs:
+    for variant, values in runs:
         for case in cases:
             for site in SITE_IDS:
-                row = {"if_step": step, "case": case, "site": site,
+                row = {"variant": variant, "case": case, "site": site,
                        "t_star": _join(t_star(series(values, "m", "ESCR", site, case)))}
                 if case != INTACT:
                     ln = np.log(series(values, "m", "ESCR", site, case)
@@ -587,11 +519,7 @@ def if_step_robustness(runs, cases, corridors):
                     row.update({"share_hours_stronger": float((sign0(ln) > 0).mean()),
                                 "median_r": float(np.expm1(ln).median())})
                 rows.append(row)
-    out = pd.DataFrame(rows)
-    ref = runs[0][1]
-    unaffected = max(float((values["m"][m] / ref["m"][m] - 1).abs().max().max())
-                     for _, values in runs[1:] for m in ("SCR", "WSCR", "SDSCR")) if len(runs) > 1 else 0.0
-    return out, unaffected
+    return pd.DataFrame(rows)
 
 
 def parallel_circuits(values, representative):
@@ -651,16 +579,8 @@ def build_summary(data, ctx, out, cases, corridors):
 
     # every corridor-site has the same number of hours, so the mean of shares is the pooled share
     c = "D4 in network terms an outage weakens a site or leaves it practically unaffected"
-    add(c, "Z_ii part matches the topology-only ΔZ_ii: max |difference| in Δln",
-        float(d4["max_abs_Z_ii_minus_topology"].max()), "d4_outage")
     add(c, "network (Z_ii only): largest change toward stronger",
         pct(d4["max_r_Z_ii_only"].max()), "d4_outage")
-    add(c, "topology alone: hours with contingency > intact",
-        pct(d4["share_hours_stronger_topology"].mean()), "d4_outage")
-    add(c, "  series branch alone: hours with contingency > intact",
-        pct(d4["share_hours_stronger_topology_series"].mean()), "d4_outage")
-    add(c, "  charging-shunt part strengthens (median Δln > 0)",
-        _count(d4["median_dln_Z_ii_topology_shunt"] > 0), "d4_outage")
 
     c = "D4 hours with metric_contingency > metric_intact"
     for metric in METRICS:
@@ -680,7 +600,7 @@ def build_summary(data, ctx, out, cases, corridors):
             f"{int(part['n_stronger_coupling_load_falls'].sum())}/{int(part['n_hours_stronger'].sum())}",
             "d4_outage")
     escr = d4[d4["metric"] == "ESCR"]
-    add(c, "ESCR: stronger hours in IF ≈ 0 outage states",
+    add(c, "ESCR: stronger hours in MIIF ≈ 0 outage states",
         f"{int(escr['n_stronger_IF_zero_outage'].sum())}/{int(escr['n_hours_stronger'].sum())}", "d4_outage")
 
     d5, dispatch = out["d5_snapshots"], out["d5_dispatch"]
@@ -698,26 +618,23 @@ def build_summary(data, ctx, out, cases, corridors):
     add(c, "largest gap: Δln from |V| / coupling / Z_ii",
         f"{worst['dln_V']:.4g} / {worst['dln_coupling']:.4g} / {worst['dln_Z_ii']:.4g}", "d5_snapshots")
 
-    add("A3 denominators change no conclusion", "unchanged under rated, output and MVA",
+    add("A3 denominators change no conclusion", "unchanged under rated and MVA",
         bool(out["a3_denominators"]["unchanged"].all()), "a3_denominators")
     add("A3 denominators change no conclusion", "max relative reconstruction difference",
         float(out["reconstruction_check"]["max_rel_diff"].max()), "reconstruction_check")
 
-    if "if_step_robustness" in out:
-        rob = out["if_step_robustness"]
-        c = "check IF probe step (Gate 3 limitation 2)"
-        ref_step = rob["if_step"].iloc[0]
-        ref = rob[rob["if_step"] == ref_step].set_index(["case", "site"])
-        steps = sorted(rob["if_step"].unique())
-        add(c, "ESCR hours with contingency > intact, per step", " | ".join(
-            f"{100 * s:g} %: {pct(rob[(rob['if_step'] == s) & (rob['case'] != INTACT)]['share_hours_stronger'].mean())}"
-            for s in steps), "if_step_robustness")
-        add(c, f"ESCR weakest hour unchanged from the {100 * ref_step:g} % step", " | ".join(
-            f"{100 * s:g} %: "
-            f"{_count(rob[rob['if_step'] == s].set_index(['case', 'site'])['t_star'] == ref['t_star'])}"
-            for s in steps if s != ref_step), "if_step_robustness")
-        add(c, "SCR, WSCR, SDSCR unchanged by the step (max relative difference)",
-            out["if_step_unaffected"], "if_step_robustness")
+    if "miif_variants" in out:
+        rob = out["miif_variants"]
+        c = "check ESCR MIIF variants (E3)"
+        ref_variant = rob["variant"].iloc[0]
+        ref = rob[rob["variant"] == ref_variant].set_index(["case", "site"])
+        variants = list(dict.fromkeys(rob["variant"]))
+        add(c, "ESCR hours with contingency > intact, per variant", " | ".join(
+            f"{v}: {pct(rob[(rob['variant'] == v) & (rob['case'] != INTACT)]['share_hours_stronger'].mean())}"
+            for v in variants), "miif_variants")
+        add(c, f"ESCR weakest hour unchanged from {ref_variant}", " | ".join(
+            f"{v}: {_count(rob[rob['variant'] == v].set_index(['case', 'site'])['t_star'] == ref['t_star'])}"
+            for v in variants if v != ref_variant), "miif_variants")
 
     par = out["parallel_circuits"]
     if not par.empty:
@@ -728,43 +645,48 @@ def build_summary(data, ctx, out, cases, corridors):
     return pd.DataFrame(rows)
 
 
-def run(input_dir=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, if_step_runs=()):
+def run(input_dir=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT):
+    started = manifest.now()
     input_dir, output_dir = Path(input_dir).resolve(), Path(output_dir).resolve()
-    if input_dir == output_dir or output_dir in {Path(d).resolve() for d in if_step_runs}:
-        raise ValueError("Output directory must differ from every input directory")
-    data = load_inputs(input_dir)
+    if input_dir == output_dir:
+        raise ValueError("Output directory must differ from the input directory")
+    raw = read_run(input_dir)
+    data = view(raw)
     hours, _ = check_inputs(data)
     corridors, representative = scenarios(data["contingencies"])
     cases = [INTACT] + corridors
     ctx = build_context(data, hours)
-    topology = topology_parts(data, corridors, ctx)
 
     values = variant_values(data["variables"], {m: P_MW[AS_RUN[m]] for m in METRICS})
     out = {"reconstruction_check": check_reconstruction(data["metrics"], values)}
-    core = core_tables(values, ctx, cases, corridors, topology)
+    core = core_tables(values, ctx, cases, corridors)
     out.update(core)
     out["d5_dispatch"] = d5_dispatch(ctx)
     out["a3_denominators"] = pd.concat([
         compare_tables(core, core_tables(variant_values(data["variables"], {m: P_MW[kind] for m in METRICS}),
-                                         ctx, cases, corridors, topology)).assign(denominator=kind)
-        for kind in ("rated", "output", "mva")
+                                         ctx, cases, corridors)).assign(denominator=kind)
+        for kind in ("rated", "mva")
     ], ignore_index=True)
     out["parallel_circuits"] = parallel_circuits(values, representative)
-    unaffected = None
-    if if_step_runs:
-        runs = [(infer_if_step(data["variables"]), values)]
-        for d in if_step_runs:
-            alt = load_inputs(d, reference=data)
-            check_inputs(alt)  # same scenarios and hours as the results of record
-            alt_values = variant_values(alt["variables"], {m: P_MW[AS_RUN[m]] for m in METRICS})
-            check_reconstruction(alt["metrics"], alt_values)
-            runs.append((infer_if_step(alt["variables"]), alt_values))
-        out["if_step_robustness"], unaffected = if_step_robustness(runs, cases, corridors)
-    out["summary"] = build_summary(data, ctx, {**out, "if_step_unaffected": unaffected}, cases, corridors)
+    runs = [(REFERENCE_VARIANT, values)]
+    for variant in PROBE_VARIANTS:
+        alt = view(raw, variant)
+        check_inputs(alt)
+        alt_values = variant_values(alt["variables"], {m: P_MW[AS_RUN[m]] for m in METRICS})
+        check_reconstruction(alt["metrics"], alt_values)
+        runs.append((variant, alt_values))
+    out["miif_variants"] = miif_variants(runs, cases, corridors)
+    out["summary"] = build_summary(data, ctx, out, cases, corridors)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, frame in out.items():
         frame.to_csv(output_dir / f"{name}.csv", index=False)
+    raw_manifest = raw["manifest"] or {}
+    manifest.write(output_dir, "analyze", started=started,
+                   inputs=[input_dir / f for f in INPUT_FILES],
+                   outputs=[output_dir / f"{name}.csv" for name in out],
+                   extra={"raw_run_id": raw_manifest.get("run_id"),
+                          "raw_of_record": raw_manifest.get("of_record")})
     return out
 
 
@@ -773,10 +695,8 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--if-step-run", type=Path, action="append", default=[], dest="if_step_runs",
-                        help="A rerun with another ESCR probe step (repeatable), for the robustness check.")
     args = parser.parse_args()
-    out = run(args.input_dir, args.output_dir, args.if_step_runs)
+    out = run(args.input_dir, args.output_dir)
     with pd.option_context("display.max_rows", None, "display.max_colwidth", 100,
                            "display.width", 200):
         print(out["summary"].drop(columns="table").to_string(index=False))

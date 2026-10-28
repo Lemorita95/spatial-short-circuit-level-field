@@ -2,9 +2,22 @@ import numpy as np
 import cmath
 import math
 
+FAULT_MODELS = ('constant_current', 'k_factor')
+
+
 class FullConverter:
     def __init__(self, name, bus_1, kVA_nominal, cos_phi, kV_nominal, *,
-                 P=None, Q=None, K_scc=1.2, V_min=0.15, K_factor=3.0, status=True):
+                 P=None, Q=None, K_scc=1.2, V_min=0.15, K_factor=3.0, status=True,
+                 fault_model='constant_current'):
+        '''
+            fault_model, the current injected during a fault (get_I):
+                'constant_current'  the pre-fault current, held: no fault contribution
+                'k_factor'          K-factor reactive injection with q-priority current limit
+                                    (K_scc, V_min, K_factor are used only by this model)
+        '''
+        if fault_model not in FAULT_MODELS:
+            raise ValueError(f"fault_model must be one of {FAULT_MODELS}, got {fault_model!r}")
+        self.fault_model = fault_model
         self.element_type = "full_converter"
         self.name = name
         self.bus_1 = bus_1
@@ -63,6 +76,8 @@ class FullConverter:
         '''
         # compute pre fault conditions
         I_pre_fault = np.divide(np.conjugate(S_pre_fault), np.conjugate(V_pre_fault))
+        if self.fault_model == 'constant_current':
+            return I_pre_fault
         theta = cmath.phase(V_terminal)
         deltaV = abs(V_terminal) - abs(V_pre_fault)
 

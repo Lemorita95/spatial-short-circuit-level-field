@@ -249,7 +249,24 @@ function folderName(fileList) { const p = fileList[0] && fileList[0].webkitRelat
 const MAG_VARS = new Set(['v_pf', 'z_ii', 'z_rr', 'w_complex']);
 const busList = v => v == null ? [] : String(v).split(';').map(x => x.trim().replace(/\.0+$/, '')).filter(Boolean);
 
+/* The explorer shows the sequential-commitment states (E1, E2) with ESCR through its
+   reference MIIF. The ESCR terms shared by every variant are written with the reference
+   rows, the probe audit terms with AUDITED_PROBE. Runs without these columns pass through. */
+const REFERENCE_VARIANT = 'impedance', AUDITED_PROBE = 'probe_0.01';
+function referenceView(files) {
+  const seq = r => r.commitment == null || r.commitment === 'sequential';
+  const ref = r => r.variant == null || r.variant === REFERENCE_VARIANT;
+  const out = { ...files };
+  out['metrics_timeseries.csv'] = files['metrics_timeseries.csv'].filter(r => seq(r) && ref(r));
+  out['metric_variables.csv'] = files['metric_variables.csv'].filter(r => seq(r) &&
+    (ref(r) || (r.variant === AUDITED_PROBE && r.variable !== 'if_magnitude')));
+  out['run_summary.csv'] = files['run_summary.csv'].filter(seq);
+  if (files['dispatch_schedule.csv']) out['dispatch_schedule.csv'] = files['dispatch_schedule.csv'].filter(seq);
+  return out;
+}
+
 function build(files) {
+  files = referenceView(files);
   const M = files['metrics_timeseries.csv'], V = files['metric_variables.csv'], S = files['run_summary.csv'];
   const DS = files['dispatch_schedule.csv'] || null;
   const caseOrder = []; [...S, ...M].forEach(r => { if (!caseOrder.includes(r.case)) caseOrder.push(r.case); });

@@ -1,9 +1,10 @@
 """Every parameter of the system-strength study, in one place.
 
 Sites and equipment (Gate 2), the week and commitment rules, the contingency
-rule, the ESCR probe steps, the PowerWorld validation states (E0) and the
-analysis definitions approved at Gate 4 (evidence plan v2). Nothing here runs
-a calculation; the other modules of this package import from it.
+rule, the short-circuit and interaction-factor conventions, the experiments
+(E0-E5), the PowerWorld validation states (E0) and the analysis definitions
+approved at Gate 4 (evidence plan v2). Nothing here runs a calculation; the
+other modules of this package import from it.
 """
 from __future__ import annotations
 
@@ -42,8 +43,15 @@ WINDOW_HOURS = 168
 SE3_TIMESTAMP_COLUMN = "timestamp"
 SE3_LOAD_COLUMN = "SE3"
 
-# Commitment rule: non-slack units filled in descending MWMax (tie-break bus,
-# ID); stop when the residual is below the next unit's MWMin; slack takes the rest.
+# Commitment rules (the `commitment` column of every raw file):
+#   sequential  non-slack units filled in descending MWMax (tie-break bus, ID); stop
+#               when the residual is below the next unit's MWMin; slack takes the rest.
+#   all_online  rule (a): every non-slack unit online at max(MWMin, s * MWMax), s in
+#               [0, 1] set to meet the target; the slack takes the rest. When the units'
+#               MWMin alone exceeds the target (s = 0) the slack exports (slack_exporting).
+# Both dispatch demand on the 37-bus network and demand - IBR_MW on the 46-bus one.
+SEQUENTIAL, ALL_ONLINE = "sequential", "all_online"
+COMMITMENT_RULES = (SEQUENTIAL, ALL_ONLINE)
 
 # =============================================================================
 # 3. IBR sites (Gate 2)
@@ -59,13 +67,15 @@ FEEDER_B_SYSTEM_BASE = 0.069
 IBR_MVA_MULTIPLIER = 1.1
 TRANSFORMER_MVA_MULTIPLIER = 1.2
 Q_CAPABILITY_MULTIPLIER = 0.436
+# Converters in the fault calculation (models/FullConverter.py FAULT_MODELS): an ideal
+# current source holding its pre-fault current, i.e. no fault contribution.
+CONVERTER_FAULT_MODEL = "constant_current"
 
 
 @dataclass(frozen=True)
 class IBRSite:
     host_bus: int
     pmax_mw: float
-    operating_mw: float
     main_mv_bus: int
     padmount_hv_bus: int
     converter_lv_bus: int
@@ -103,12 +113,14 @@ class IBRSite:
 
 
 # Two MV buses + one LV bus at each site. Bus IDs do not overlap Glover IDs.
+# Every plant runs at its rated output, the worst case: the largest P in every
+# metric's denominator and the most synchronous generation displaced.
 SITES = (
-    IBRSite(21, 60.0, 48.0, 2101, 2102, 2103),
-    IBRSite(48, 45.0, 36.0, 4801, 4802, 4803),
-    IBRSite(16, 45.0, 36.0, 1601, 1602, 1603),
+    IBRSite(21, 60.0, 2101, 2102, 2103),
+    IBRSite(48, 45.0, 4801, 4802, 4803),
+    IBRSite(16, 45.0, 1601, 1602, 1603),
 )
-IBR_MW = sum(site.operating_mw for site in SITES)
+IBR_MW = sum(site.pmax_mw for site in SITES)
 
 # =============================================================================
 # 4. Metrics, operating-state checks, contingencies
@@ -117,8 +129,8 @@ IBR_MW = sum(site.operating_mw for site in SITES)
 METRICS = ("SCR", "WSCR", "ESCR", "SDSCR")
 # Network each metric is evaluated on: the 37-bus case or the 46-bus IBR case.
 NETWORK = {"SCR": "base", "WSCR": "base", "ESCR": "ibr", "SDSCR": "ibr"}
-# Denominator as run: rated MW or operating MW.
-AS_RUN = {"SCR": "rated", "WSCR": "output", "ESCR": "rated", "SDSCR": "output"}
+# Denominator as run: every metric uses rated MW.
+AS_RUN = {m: "rated" for m in METRICS}
 EVAL_BUS = {
     "SCR": {str(s.host_bus): s.poi_bus for s in SITES},
     "WSCR": {str(s.host_bus): s.poi_bus for s in SITES},
@@ -126,10 +138,30 @@ EVAL_BUS = {
     "SDSCR": {str(s.host_bus): s.sdscr_bus for s in SITES},
 }
 
-# ESCR interaction-factor probe: relative MV voltage step. The run of record
-# uses IF_STEP; IF_STEP_ROBUSTNESS are the reruns of the IF-step check.
-IF_STEP = 0.01
-IF_STEP_ROBUSTNESS = (0.005, 0.02)
+# Short circuit (SCC_NR): SCMVA = S_BASE_MVA * V_n * |I_f| with V_n = 1 pu, from a
+# bolted fault (fault impedance FAULT_Z_PU, the solver default) started from the
+# actual pre-fault state. Impedances come from the solver's Y_SCC builder.
+FAULT_Z_PU = 1e-6
+
+# ESCR is CIGRE's multi-infeed ESCR (eq. 1-4), with Qf = 0 (no filters or capacitors):
+#   ESCR_i = SCC_i / (P_i + sum_j MIIF_ji * P_j),   MIIF_ji = dV_j / dV_i, disturbance at i.
+# Each MIIF construction is one ESCR `variant`:
+#   impedance        |Z_ji / Z_ii|, the instant response (CIGRE): the reference
+#   probe_<step>     power-flow voltage step of <step> at bus i (E3 robustness)
+IF_STEPS = (0.005, 0.01, 0.02)
+IMPEDANCE_VARIANT = "impedance"
+
+
+def probe_variant(step):
+    return f"probe_{step:g}"
+
+
+PROBE_VARIANTS = tuple(probe_variant(s) for s in IF_STEPS)
+REFERENCE_VARIANT = IMPEDANCE_VARIANT
+ESCR_VARIANTS = (IMPEDANCE_VARIANT, *PROBE_VARIANTS)
+# The probe whose audit terms (probe Q, target/actual V, dV, generator state changes)
+# are written; the other probes write only their interaction factors.
+AUDITED_PROBE = probe_variant(0.01)
 
 # VoltageLimits preset (models/VoltageLimits.py); bands only flag states.
 VOLTAGE_PRESET = "default"
@@ -147,7 +179,48 @@ IF_ZERO = 3e-5  # IF ≈ 0 state: every IF < 3e-5 (Gate 3 record, file 02 §5)
 RECONSTRUCTION_TOL = 1e-9
 
 # =============================================================================
-# 6. E0: PowerWorld validation states
+# 6. Experiments (06 §1-2). Each raw row's experiment follows from its commitment
+# rule and case (experiment_of); E3 is the ESCR variants other than the reference.
+# RQ/D is looked up here, never stored per raw row.
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class Experiment:
+    id: str
+    name: str
+    states: str
+    serves: tuple[str, ...]
+
+
+EXPERIMENTS = {
+    "E0": Experiment("E0", "Benchmark validation",
+                     "PowerWorld agreement: base + A1-A3, B1-B3", ("method validity",)),
+    "E1": Experiment("E1", "Intact week, unit-commitment logic",
+                     "168 h, SE3 load scaling, sequential commitment by MWMax",
+                     ("RQ1-D1", "RQ1-D5", "RQ2")),
+    "E2": Experiment("E2", "N-1 line contingencies",
+                     "every included line outage x 168 h, commitment held at E1",
+                     ("RQ1-D4", "RQ1-D1", "RQ1-D5")),
+    "E3": Experiment("E3", "MIIF robustness (ESCR)",
+                     "ESCR on every state with probe MIIF at 0.5, 1 and 2 %",
+                     ("RQ1-D4", "RQ3")),
+    "E5": Experiment("E5", "Intact week, dispatch only",
+                     "168 h, every unit online, rule (a)", ("RQ1-D1", "RQ1-D5", "RQ2")),
+}
+
+
+def experiment_of(commitment, case):
+    """E1, E2 or E5 for a raw row's (commitment, case)."""
+    if commitment == SEQUENTIAL:
+        return "E1" if case == INTACT else "E2"
+    if commitment == ALL_ONLINE and case == INTACT:
+        return "E5"
+    raise ValueError(f"No experiment for commitment={commitment!r}, case={case!r}")
+
+
+# =============================================================================
+# 7. E0: PowerWorld validation states
 # =============================================================================
 
 

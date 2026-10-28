@@ -2,8 +2,17 @@
 
 Study conventions:
   SCR/WSCR: pre-installation 37-bus network (no proposed converter equipment).
-  ESCR: augmented network, 34.5 kV padmount-HV buses, prescribed +1% voltage step.
+  ESCR: augmented network, 34.5 kV padmount-HV buses; CIGRE multi-infeed ESCR
+        (eq. 1-4, Qf = 0) with impedance and voltage-step interaction factors.
   SDSCR: augmented network, 0.69 kV converter terminals, Wu (2018).
+
+One framework for every metric:
+  SCMVA       the short-circuit solver (ShortCircuit.SCC_NR), a bolted fault started
+              from the solved pre-fault state: SCMVA = S_base * V_n * |I_f|, V_n = 1 pu.
+  impedances  the solver's admittance builder (ShortCircuit.build_Y_SCC): passive Y-bus,
+              source admittances and load admittances at the pre-fault voltages.
+  voltages    the pre-fault power flow supplied by the experiment runner.
+Each converter injects what its own fault model returns (FullConverter.fault_model).
 
 All voltages and impedances are on the 100 MVA common base. The calculation
 state (including synchronous commitment) is supplied by the experiment runner.
@@ -23,52 +32,37 @@ from scipy.sparse.linalg import splu
 
 from models.Generators import Generator
 from models.PowerFlow import PowerFlow
+from models.ShortCircuit import ShortCircuit as SC
 
 S_BASE_MVA = 100.0
 EPS = 1e-12
+FAULT_Z_PU = 1e-6  # SCC_NR's bolted-fault impedance
 
 
-def short_circuit_admittance(net, v_pf):
-    """Consistent pre-fault linear SCC admittance.
+def fault_elements(net, v_pf):
+    """Active sources and loads of the solved pre-fault state, as the short-circuit
+    solver takes them: {(name, bus index): (element, V_pre, S_pre)}."""
+    v = np.asarray(v_pf, dtype=complex)
+    if v.shape != (len(net.idx),):
+        raise ValueError("Expected complete complex pre-fault voltage vector")
+    pf = PowerFlow()
+    state = np.r_[np.angle(v), np.abs(v)]
+    return net.get_active_elements(v, pf.get_active_elements_flow(net, state),
+                                   pf.get_active_element_status(net))
 
-    Retain the passive YBus, connected conventional-source impedances, and
-    constant-power loads as pre-fault *equivalent admittances*. Converters are
-    PQ injections in the pre-fault power flow but have no fault admittance.
-    This matches the equivalent-load convention of the validated SCC solver.
-    """
+
+def short_circuit_admittance(net, v_pf, elements=None):
+    """Y_SCC from the short-circuit solver's builder (no fault admittance): the passive
+    YBus plus each active element's admittance at the pre-fault state. Converters
+    contribute none (FullConverter.get_Y)."""
     if not hasattr(net, "YBus") or not hasattr(net, "idx"):
         raise ValueError("Build net.YBus first")
-    v_pf = np.asarray(v_pf, dtype=complex)
-    if v_pf.shape != (len(net.idx),):
-        raise ValueError("Expected complete complex pre-fault voltage vector")
-    y = csc_matrix(net.YBus, dtype=complex).copy()
-    diagonal = np.zeros(y.shape[0], dtype=complex)
-    for group in (net.generators, net.external_grids):
-        for element in group.values():
-            if not element.status:
-                continue
-            rows, cols, vals = element.get_Y()
-            for r, c, val in zip(rows, cols, vals):
-                if r != c:
-                    raise ValueError("Unexpected non-diagonal source admittance")
-                diagonal[net.idx[r]] += val
-    for load in net.loads.values():
-        if not load.status:
-            continue
-        idx = net.idx[load.bus_1]
-        if abs(v_pf[idx]) ** 2 < EPS:
-            raise ValueError(f"Cannot form load equivalent at bus {load.bus_1}: zero voltage")
-        rows, cols, vals = load.get_Y(v_pf[idx], complex(load.P, load.Q))
-        for r, c, val in zip(rows, cols, vals):
-            if r != c:
-                raise ValueError("Unexpected non-diagonal load admittance")
-            diagonal[net.idx[r]] += val
-    y.setdiag(y.diagonal() + diagonal)
-    return y
+    elements = fault_elements(net, v_pf) if elements is None else elements
+    return SC.build_Y_SCC(np.asarray(v_pf, dtype=complex), SC.SCC_tasks(elements), net.YBus)
 
 
 def z_block(net, bus_ids, *, v_pf, y=None):
-    """(Y_SC_full^-1)[R,R], calculated using sparse solves."""
+    """(Y_SCC^-1)[R,R], calculated using sparse solves."""
     bus_ids = tuple(int(b) for b in bus_ids)
     if not bus_ids or len(bus_ids) != len(set(bus_ids)):
         raise ValueError("Evaluation buses must be distinct")
@@ -78,6 +72,20 @@ def z_block(net, bus_ids, *, v_pf, y=None):
     rhs = np.zeros((y.shape[0], len(indices)), dtype=complex)
     rhs[indices, np.arange(len(indices))] = 1
     return splu(csc_matrix(y)).solve(rhs)[indices, :]
+
+
+def fault_scmva(net, bus_ids, *, v_pf, elements=None, s_base_mva=S_BASE_MVA, zf=FAULT_Z_PU):
+    """{bus: SCMVA} = S_base * V_n * |I_f| (V_n = 1 pu), one SCC_NR bolted fault per bus
+    from the solved pre-fault state. A fault that does not converge raises."""
+    v = np.asarray(v_pf, dtype=complex)
+    elements = fault_elements(net, v) if elements is None else elements
+    out = {}
+    for bus in bus_ids:
+        i_fault = SC.SCC_NR(net.idx[bus], v, net.YBus, elements, zf=zf)
+        if i_fault is None:
+            raise RuntimeError(f'Short circuit did not converge for a fault at bus {bus}')
+        out[bus] = s_base_mva * 1.0 * abs(i_fault)
+    return out
 
 
 def _voltage(net, v, bus):
@@ -112,68 +120,72 @@ class SCR(_MetricHistory):
     rated_mw: Mapping[int, float] = field(default_factory=dict)
     s_base_mva: float = S_BASE_MVA
 
-    def evaluate(self, step, net, v_pf):
+    def evaluate(self, step, net, v_pf, scmva=None):
+        """scmva: {bus: SCMVA} already computed for this state (fault_scmva), or None."""
         if net.full_converters:
             raise ValueError('SCR requires no-IBR reference network')
         if any(b not in net.idx for b in self.rated_mw):
             raise ValueError('POI missing from reference network')
         buses = tuple(self.rated_mw)
+        if scmva is None:
+            scmva = fault_scmva(net, buses, v_pf=v_pf, s_base_mva=self.s_base_mva)
         z = z_block(net, buses, v_pf=v_pf)
-        scmva = {}
-        values = {}
-        voltages = {}
-        for k, bus in enumerate(buses):
-            v = _voltage(net, v_pf, bus)
-            voltages[bus] = v
-            scmva[bus] = _ratio(self.s_base_mva * abs(v), abs(z[k,k]))
-            values[bus] = _ratio(scmva[bus], self.rated_mw[bus])
-        return self._record(step, value=values, scmva=scmva,
-                            v_pf=voltages, z_ii=dict(zip(buses, np.diag(z))),
+        values = {bus: _ratio(scmva[bus], self.rated_mw[bus]) for bus in buses}
+        return self._record(step, value=values, scmva={b: scmva[b] for b in buses},
+                            v_pf={b: _voltage(net, v_pf, b) for b in buses},
+                            z_ii=dict(zip(buses, np.diag(z))),
                             rated_mw=dict(self.rated_mw))
 
 
 @dataclass
 class WSCR(_MetricHistory):
     """IEEE 2800 grouped WSCR, same no-IBR SCMVA convention as SCR."""
-    operating_mw: Mapping[int, float] = field(default_factory=dict)
+    rated_mw: Mapping[int, float] = field(default_factory=dict)
     s_base_mva: float = S_BASE_MVA
 
-    def evaluate(self, step, net, v_pf):
+    def evaluate(self, step, net, v_pf, scmva=None):
+        """scmva: {bus: SCMVA} already computed for this state (fault_scmva), or None."""
         if net.full_converters:
             raise ValueError('WSCR requires no-IBR reference network')
-        buses = tuple(self.operating_mw)
+        buses = tuple(self.rated_mw)
+        if scmva is None:
+            scmva = fault_scmva(net, buses, v_pf=v_pf, s_base_mva=self.s_base_mva)
         z = z_block(net, buses, v_pf=v_pf)
-        scmva = {b: _ratio(self.s_base_mva * abs(_voltage(net, v_pf, b)), abs(z[k,k]))
-                 for k, b in enumerate(buses)}
-        p_total = sum(self.operating_mw.values())
-        numerator = sum(scmva[b] * self.operating_mw[b] for b in buses)
+        p_total = sum(self.rated_mw.values())
+        numerator = sum(scmva[b] * self.rated_mw[b] for b in buses)
         return self._record(step, value=_ratio(numerator, p_total*p_total),
-                            scmva=scmva, operating_mw=dict(self.operating_mw),
+                            scmva={b: scmva[b] for b in buses}, rated_mw=dict(self.rated_mw),
                             z_ii=dict(zip(buses, np.diag(z))))
 
 
 @dataclass
 class ESCR(_MetricHistory):
-    """Fingrid-inspired MV ESCR using an explicitly prescribed +1% voltage step.
+    """CIGRE multi-infeed ESCR (eq. 1-4) at the MV evaluation buses, with Qf = 0:
 
-    For each evaluated MV bus, a temporary ideal numerical PV probe holds the
-    bus at 1% above its pre-fault voltage magnitude. The probe has infinite
-    series impedance (zero Y-bus contribution), zero active power, and wide
-    reactive limits. It is added to a deep copy of the solved operating state,
-    so neither the production network nor other perturbations are mutated.
+        ESCR_i = SCMVA_i / (P_i + sum_j MIIF_ji * P_j),   MIIF_ji = dV_j / dV_i,
 
-    IF[j,i] = | |V_j(new)| - |V_j(base)| | / | |V_i(new)| - |V_i(base)| |.
+    a disturbance at bus i. The MIIF is evaluated in several ways (variants), all
+    sharing the state's SCMVA:
+      'impedance'   |Z_ji / Z_ii| from Y_SCC: the instant network response (CIGRE)
+      probe step s  a temporary ideal numerical PV probe holds bus i at (1 + s) times
+                    its pre-fault voltage magnitude in a power flow; IF[j,i] =
+                    | |V_j(new)| - |V_j(base)| | / | |V_i(new)| - |V_i(base)| |.
+
+    The probe has infinite series impedance (zero Y-bus contribution), zero active
+    power, and wide reactive limits. It is added to a deep copy of the solved operating
+    state, so neither the production network nor other perturbations are mutated.
     This avoids a Q-injection root search and its possible PV/PQ solution-branch
     discontinuities. It is an explicitly prescribed voltage-step method, not a
     claim of exact reproduction of any particular grid-code implementation.
     """
     rated_mw: Mapping[int, float] = field(default_factory=dict)
     s_base_mva: float = S_BASE_MVA
-    relative_voltage_step: float = 0.01
+    probe_steps: tuple = (0.01,)
+    impedance: bool = True
     voltage_tolerance_pu: float = 1e-5
     probe_q_limit_pu: float = 1e6
 
-    def _solve_voltage_step(self, net, v0, bus, base_state=None):
+    def _solve_voltage_step(self, net, v0, bus, relative_step, base_state=None):
         """Solve one prescribed voltage step on a disposable network copy.
 
         The solve starts from the base voltages and generator states (base_state).
@@ -186,7 +198,7 @@ class ESCR(_MetricHistory):
             raise ValueError(f'Temporary generator name collision: {name}')
 
         base_mag = abs(_voltage(net, v0, bus))
-        target_mag = base_mag * (1.0 + self.relative_voltage_step)
+        target_mag = base_mag * (1.0 + relative_step)
         # Infinite Z contributes zero source admittance; the active generator
         # object is used only to classify this bus as PV and prescribe |V|.
         with warnings.catch_warnings():
@@ -237,31 +249,22 @@ class ESCR(_MetricHistory):
                       if g in base_state and s != base_state[g]}
         return probe_q_mvar, target_mag, actual_mag, v_new, pv_changes
 
-    def evaluate(self, step, net, v_pf, pv_state):
-        """pv_state: generator states (0 PV, +1 at Qmax, -1 at Qmin) of the pre-fault solve
-        that produced v_pf (PowerFlow.pv_state); every probe starts from them."""
+    def _values(self, scmva, interaction):
         buses = tuple(self.rated_mw)
-        z = z_block(net, buses, v_pf=v_pf)
-        scmva = {
-            b: _ratio(self.s_base_mva * abs(_voltage(net, v_pf, b)), abs(z[k, k]))
-            for k, b in enumerate(buses)
-        }
-        interaction = {}
-        probe_q = {}
-        target_v = {}
-        actual_v = {}
-        delta_v = {}
-        values = {}
-        pv_changes = {}
-        base_state = dict(pv_state)
+        return {i: _ratio(scmva[i], self.rated_mw[i] + sum(
+                    interaction[(j, i)] * self.rated_mw[j] for j in buses if j != i))
+                for i in buses}
 
+    def _probe(self, step, net, v_pf, relative_step, base_state):
+        buses = tuple(self.rated_mw)
+        interaction, probe_q, target_v, actual_v, delta_v, pv_changes = {}, {}, {}, {}, {}, {}
         for i in buses:
             q_mvar, target_mag, actual_mag, v_new, changes = self._solve_voltage_step(
-                net, v_pf, i, base_state)
+                net, v_pf, i, relative_step, base_state)
             pv_changes[i] = len(changes)
             if changes:
-                warnings.warn(f'{step}: ESCR probe at bus {i} changed generator states '
-                              f'{changes} (bus: (base, probe); 0 PV, +1 Qmax, -1 Qmin)')
+                warnings.warn(f'{step}: ESCR probe {relative_step:g} at bus {i} changed generator '
+                              f'states {changes} (bus: (base, probe); 0 PV, +1 Qmax, -1 Qmin)')
             probe_q[i] = q_mvar
             target_v[i] = target_mag
             actual_v[i] = actual_mag
@@ -275,37 +278,47 @@ class ESCR(_MetricHistory):
             for j in buses:
                 if j != i:
                     interaction[(j, i)] = _ratio(abs(delta_v[i][j]), abs(dv_i))
+        return {'if_magnitude': interaction, 'probe_reactive_power_mvar': probe_q,
+                'probe_pv_changes': pv_changes, 'target_voltage_pu': target_v,
+                'actual_voltage_pu': actual_v, 'delta_v_pu': delta_v}
 
-        for i in buses:
-            denominator = self.rated_mw[i] + sum(
-                interaction[(j, i)] * self.rated_mw[j] for j in buses if j != i
-            )
-            values[i] = _ratio(scmva[i], denominator)
+    def evaluate(self, step, net, v_pf, pv_state):
+        """{variant: record}, variant 'impedance' or a probe step (float). Every record
+        holds value, if_magnitude and the shared terms (scmva, v_pf, z_ii, rated_mw);
+        probe records add their audit terms.
 
-        return self._record(
-            step,
-            value=values,
-            scmva=scmva,
-            if_magnitude=interaction,
-            probe_reactive_power_mvar=probe_q,
-            probe_pv_changes=pv_changes,
-            target_voltage_pu=target_v,
-            actual_voltage_pu=actual_v,
-            delta_v_pu=delta_v,
-            rated_mw=dict(self.rated_mw),
-            v_pf={b: _voltage(net, v_pf, b) for b in buses},
-            z_ii=dict(zip(buses, np.diag(z))),
-        )
+        pv_state: generator states (0 PV, +1 at Qmax, -1 at Qmin) of the pre-fault solve
+        that produced v_pf (PowerFlow.pv_state); every probe starts from them."""
+        buses = tuple(self.rated_mw)
+        elements = fault_elements(net, v_pf)
+        scmva = fault_scmva(net, buses, v_pf=v_pf, elements=elements, s_base_mva=self.s_base_mva)
+        z = z_block(net, buses, v_pf=v_pf, y=short_circuit_admittance(net, v_pf, elements))
+        shared = {'scmva': scmva, 'rated_mw': dict(self.rated_mw),
+                  'v_pf': {b: _voltage(net, v_pf, b) for b in buses},
+                  'z_ii': dict(zip(buses, np.diag(z)))}
+
+        variants = {}
+        if self.impedance:
+            interaction = {(j, i): _ratio(abs(z[kj, ki]), abs(z[ki, ki]))
+                           for ki, i in enumerate(buses) for kj, j in enumerate(buses) if j != i}
+            variants['impedance'] = {'if_magnitude': interaction}
+        base_state = dict(pv_state)
+        for relative_step in self.probe_steps:
+            variants[relative_step] = self._probe(step, net, v_pf, relative_step, base_state)
+        for record in variants.values():
+            record.update(value=self._values(scmva, record['if_magnitude']), **shared)
+        self._record(step, variants=variants)
+        return variants
 
 
 @dataclass
 class SDSCR(_MetricHistory):
     """Wu (2018) terminal-based SDSCR using complex coupling weights."""
-    operating_mw: Mapping[int, float] = field(default_factory=dict)
+    rated_mw: Mapping[int, float] = field(default_factory=dict)
     s_base_mva: float = S_BASE_MVA
 
     def evaluate(self, step, net, v_pf):
-        buses = tuple(self.operating_mw)
+        buses = tuple(self.rated_mw)
         z = z_block(net, buses, v_pf=v_pf)
         voltages = {b: _voltage(net, v_pf, b) for b in buses}
         weights = {}
@@ -315,15 +328,15 @@ class SDSCR(_MetricHistory):
             if abs(zii) < EPS:
                 values[i] = float('nan')
                 continue
-            effective_p = complex(self.operating_mw[i] / self.s_base_mva)
+            effective_p = complex(self.rated_mw[i] / self.s_base_mva)
             for h, j in enumerate(buses):
                 if i == j:
                     continue
                 vj = voltages[j]
                 w = (z[k,h] / zii) * np.conjugate(vi/vj) if abs(vj) > EPS else complex('nan')
                 weights[(i,j)] = w
-                effective_p += w * self.operating_mw[j] / self.s_base_mva
+                effective_p += w * self.rated_mw[j] / self.s_base_mva
             values[i] = _ratio(abs(vi)**2, abs(zii)*abs(effective_p))
         return self._record(step, value=values, w_complex=weights,
                             v_pf=voltages, z_rr=z.copy(),
-                            operating_mw=dict(self.operating_mw))
+                            rated_mw=dict(self.rated_mw))
