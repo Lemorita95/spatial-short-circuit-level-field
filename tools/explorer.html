@@ -74,6 +74,7 @@ h1 { font-weight: 500; font-size: 22px; letter-spacing: -.01em; margin: 0 }
 .chip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block }
 .chip[aria-pressed="false"] { color: var(--faint) }
 .chip[aria-pressed="false"] i { opacity: .35 }
+select.pick { font: 500 13.5px var(--sans); color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; padding: 4px 6px; max-width: 260px }
 .toggle { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; padding-bottom: 5px }
 .toggle.disabled { opacity: .5; cursor: default }
 .tabs button:focus-visible, .chip:focus-visible, .link:focus-visible, input:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 3px; border-radius: 2px }
@@ -140,8 +141,12 @@ footer b { color: var(--ink); font-weight: 500 }
 
   <div id="app" hidden>
     <div class="controls" role="group" aria-label="View controls">
-      <div class="group"><span class="label">Case</span><div class="tabs" id="case"></div></div>
+      <div class="group"><span class="label">Case</span><div style="display:flex;gap:14px;align-items:center">
+        <select class="pick" id="case" aria-label="Case"></select>
+        <label class="toggle" id="overlay-toggle" for="overlay"><input type="checkbox" id="overlay"> with intact</label></div></div>
+      <div class="group"><span class="label">Commitment</span><div class="tabs" id="commitment"></div></div>
       <div class="group"><span class="label">Metric</span><div class="tabs" id="metric"></div></div>
+      <div class="group" id="variant-group"><span class="label">ESCR interaction factor</span><select class="pick" id="variant" aria-label="ESCR interaction factor"></select></div>
       <div class="group"><span class="label">IBR sites</span><div class="chips" id="sites"></div></div>
       <label class="toggle" id="cmp-toggle" for="cmp"><input type="checkbox" id="cmp"> comparison run</label>
     </div>
@@ -186,8 +191,9 @@ footer b { color: var(--ink); font-weight: 500 }
     </div>
 
     <footer>
-      <div><b>How values are built.</b> SCMVA<sub>i</sub> = 100·|V<sub>i</sub>|/|Z<sub>ii</sub>| from the pre-fault state. SCR and WSCR use the network without IBRs at the POI buses. ESCR uses the network with IBRs at the MV buses, with interaction factors IF<sub>j←i</sub> = |ΔV<sub>j</sub>|/|ΔV<sub>i</sub>| from a +1 % voltage step; its ceiling SCMVA<sub>i</sub>/P<sub>rated,i</sub> is the value with all IF = 0. SDSCR uses the converter terminals with complex coupling weights (Wu 2018).</div>
-      <div><b>Model assumption.</b> A generator in voltage control holds its bus voltage exactly, so it decouples the sites on either side of it. Real units regulate behind a step-up transformer with droop, so real interaction would be small but not zero.</div>
+      <div><b>How values are built.</b> SCMVA<sub>i</sub> = 100·|I<sub>f,i</sub>| (V<sub>n</sub> = 1 pu) from a bolted fault solved by the short-circuit solver at the actual pre-fault state; converters hold their pre-fault current, so they add no fault current. Impedances come from the solver's admittance builder (passive network, generator and load admittances). Every plant runs at rated output, and every denominator uses rated MW. SCR and WSCR use the network without IBRs at the host (POI) buses. ESCR is CIGRE's multi-infeed ESCR at the 34.5 kV padmount buses, SCMVA<sub>i</sub> / (P<sub>i</sub> + Σ MIIF<sub>ji</sub> P<sub>j</sub>), with Q<sub>f</sub> = 0. SDSCR uses the 0.69 kV converter terminals with complex coupling weights (Wu 2018).</div>
+      <div><b>ESCR interaction factor.</b> MIIF<sub>ji</sub> = ΔV<sub>j</sub>/ΔV<sub>i</sub> for a disturbance at bus i. <i>Impedance</i> (the reference, CIGRE's instant response): |Z<sub>ji</sub>/Z<sub>ii</sub>|. <i>Probe 0.5 / 1 / 2 %</i>: a power-flow voltage step at bus i with generators holding their voltage and taps frozen, i.e. the response after voltage control has acted; an ideal voltage-controlled generator decouples the sites on either side of it.</div>
+      <div><b>Commitment.</b> <i>Unit commitment rule</i>: units committed by MWMax as load rises (E1 intact, E2 outages, commitment held). <i>All generators on line</i>: every unit on line at max(MWMin, s·MWMax), s set to meet the load, rule (a) (E5, intact only).</div>
       <div>Generator modes are from the network with IBRs. Sites pair the SCR, ESCR and SDSCR buses in the order the runner writes them. Voltage flags come from the run's voltage preset and are reported, not corrected. No threshold lines are drawn.</div>
     </footer>
   </div>
@@ -249,24 +255,33 @@ function folderName(fileList) { const p = fileList[0] && fileList[0].webkitRelat
 const MAG_VARS = new Set(['v_pf', 'z_ii', 'z_rr', 'w_complex']);
 const busList = v => v == null ? [] : String(v).split(';').map(x => x.trim().replace(/\.0+$/, '')).filter(Boolean);
 
-/* The explorer shows the sequential-commitment states (E1, E2) with ESCR through its
-   reference MIIF. The ESCR terms shared by every variant are written with the reference
-   rows, the probe audit terms with AUDITED_PROBE. Runs without these columns pass through. */
+/* One view of the run: the states of one commitment rule (sequential: E1 intact, E2 outages;
+   all_online: E5, intact only), with ESCR through one MIIF variant. The ESCR terms shared by
+   every variant are written with the reference rows, the probe audit terms with AUDITED_PROBE.
+   Runs without these columns pass through unchanged. */
 const REFERENCE_VARIANT = 'impedance', AUDITED_PROBE = 'probe_0.01';
-function referenceView(files) {
-  const seq = r => r.commitment == null || r.commitment === 'sequential';
-  const ref = r => r.variant == null || r.variant === REFERENCE_VARIANT;
+const COMMITMENTS = [['sequential', 'Unit commitment rule'], ['all_online', 'All generators on line']];
+const VARIANTS = [['impedance', 'Impedance (CIGRE)'], ['probe_0.005', 'Probe 0.5 %'],
+                  ['probe_0.01', 'Probe 1 %'], ['probe_0.02', 'Probe 2 %']];
+const SHARED_TERMS = new Set(['scmva', 'rated_mw', 'z_ii', 'v_pf']);
+function referenceView(files, commitment, variant) {
+  commitment = commitment || 'sequential'; variant = variant || REFERENCE_VARIANT;
+  const rule = r => r.commitment == null || r.commitment === commitment;
+  const own = r => r.variant == null || r.variant === variant;
   const out = { ...files };
-  out['metrics_timeseries.csv'] = files['metrics_timeseries.csv'].filter(r => seq(r) && ref(r));
-  out['metric_variables.csv'] = files['metric_variables.csv'].filter(r => seq(r) &&
-    (ref(r) || (r.variant === AUDITED_PROBE && r.variable !== 'if_magnitude')));
-  out['run_summary.csv'] = files['run_summary.csv'].filter(seq);
-  if (files['dispatch_schedule.csv']) out['dispatch_schedule.csv'] = files['dispatch_schedule.csv'].filter(seq);
+  out['metrics_timeseries.csv'] = files['metrics_timeseries.csv'].filter(r => rule(r) && own(r));
+  out['metric_variables.csv'] = files['metric_variables.csv'].filter(r => rule(r) && (
+    r.variant == null ||                                                  // SCR, WSCR, SDSCR
+    (r.variant === variant && !SHARED_TERMS.has(r.variable)) ||           // this MIIF and its audit
+    (r.variant === REFERENCE_VARIANT && SHARED_TERMS.has(r.variable)) ||  // terms every variant shares
+    (r.variant === AUDITED_PROBE && variant !== AUDITED_PROBE && r.variable !== 'if_magnitude')));
+  out['run_summary.csv'] = files['run_summary.csv'].filter(rule);
+  if (files['dispatch_schedule.csv']) out['dispatch_schedule.csv'] = files['dispatch_schedule.csv'].filter(rule);
   return out;
 }
 
 function build(files) {
-  files = referenceView(files);
+  files = referenceView(files, st.commitment, st.variant);
   const M = files['metrics_timeseries.csv'], V = files['metric_variables.csv'], S = files['run_summary.csv'];
   const DS = files['dispatch_schedule.csv'] || null;
   const caseOrder = []; [...S, ...M].forEach(r => { if (!caseOrder.includes(r.case)) caseOrder.push(r.case); });
@@ -320,23 +335,27 @@ function build(files) {
   for (let k = 0; k < n; k++) {
     const poi = (busOrder.SCR || [])[k], escr = (busOrder.ESCR || [])[k], sdscr = (busOrder.SDSCR || [])[k];
     sites.push({ id: k, label: poi || escr || sdscr, poi, escr, sdscr, color: `--c${(k % 5) + 1}`,
-      rated: first(c0, 'SCR', 'rated_mw', poi) ?? first(c0, 'ESCR', 'rated_mw', escr),
-      operating: first(c0, 'WSCR', 'operating_mw', poi) ?? first(c0, 'SDSCR', 'operating_mw', sdscr) });
+      rated: first(c0, 'SCR', 'rated_mw', poi) ?? first(c0, 'ESCR', 'rated_mw', escr) });
   }
   return { N, T: ts, cases: caseOrder, metrics, vars, summary, sites, gens, hasDispatch: !!DS,
            metricList: ['SCR', 'WSCR', 'ESCR', 'SDSCR'].filter(m => caseOrder.some(c => (metrics[c] || {})[m])),
            counts: { metrics: M.length, variables: V.length, states: S.length } };
 }
 function buildCompare(files) {
-  const M = files['metrics_timeseries.csv']; const out = {};
+  // same commitment rule and ESCR variant as the main view
+  const M = referenceView(files, st.commitment, st.variant)['metrics_timeseries.csv']; const out = {};
   M.forEach(r => { ((out[r.case] ??= {})[r.metric] ??= {})[String(r.bus)] ??= []; out[r.case][r.metric][String(r.bus)][r.hour_index] = r.value; });
   return out;
 }
 
 /* ================= helpers ================= */
-let D = null, CMP = null;
+let D = null, CMP = null, RAW = null, CMP_RAW = null;
 const IF_ZERO = 1e-3;   // an interaction factor below this is treated as zero
-const CASE_LABEL = c => ({ intact: 'Intact', line_39_47_out: 'Line 39–47 out' })[c] || c.replace(/_/g, ' ');
+const CASE_LABEL = c => {
+  if (c === 'intact') return 'Intact';
+  const m = /^line_(\d+)_(\d+)(?:_ckt(\d+))?_out$/.exec(c);
+  return m ? `Line ${m[1]}–${m[2]}${m[3] ? ' ckt ' + m[3] : ''} out` : c.replace(/_/g, ' ');
+};
 const CASE_SHORT = c => c === 'intact' ? 'intact' : 'outage';
 const MET = {
   SCR:   { key: 'poi',   f: 'SCR_i = SCMVA_i / P_rated,i · network without IBRs, POI' },
@@ -345,7 +364,8 @@ const MET = {
   SDSCR: { key: 'sdscr', f: 'SDSCR_i = |V_i|² / (|Z_ii|·|P_i + Σ w_ij P_j|) · converter terminal' },
 };
 const MODE_WORD = { off: 'not committed', min: 'at Qmin', max: 'at Qmax', reg: 'regulating voltage' };
-const st = { case: null, metric: 'ESCR', sites: null, cmp: false, cmpScale: 'rel', hour: null, pinned: false };
+const st = { case: null, metric: 'ESCR', sites: null, cmp: false, cmpScale: 'rel', hour: null, pinned: false,
+             commitment: 'sequential', variant: REFERENCE_VARIANT };
 
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (x, d = 2) => x == null || !isFinite(x) ? '—' : Number(x).toFixed(d);
@@ -353,9 +373,10 @@ const vars = (c, m, v) => ((D.vars[c] || {})[m] || {})[v] || {};
 const sum = (c, k) => (D.summary[c] || {})[k] || [];
 const hoursIdx = () => D.T.map((_, i) => i);
 const idxWhere = (a, f) => { const o = []; (a || []).forEach((x, i) => { if (x != null && f(x)) o.push(i); }); return o; };
-const casesShown = () => st.case === 'both' ? D.cases : [st.case];
-const single = () => st.case !== 'both';
-const dashFor = c => (st.case === 'both' && c !== D.cases[0]) ? 'dash' : 'solid';
+// one case, or an outage drawn dashed over the intact network ("with intact")
+const casesShown = () => (st.overlay && st.case !== D.cases[0]) ? [D.cases[0], st.case] : [st.case];
+const single = () => casesShown().length === 1;
+const dashFor = c => (!single() && c !== D.cases[0]) ? 'dash' : 'solid';
 const shownSites = () => D.sites.filter(s => st.sites.has(s.id));
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const dayTime = t => { const d = new Date(String(t).replace(' ', 'T')); return `${WEEKDAY[d.getDay()]} ${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:00`; };
@@ -458,7 +479,7 @@ function drawContext() {
     tr.push({ x: r.idx.map(i => D.T[i]), y: r.idx.map(() => y), customdata: r.idx, type: 'scatter', mode: 'markers', name: r.name,
       marker: { symbol: 'line-ns-open', size: 8, color: css(r.color), line: { width: 1.5, color: css(r.color) } }, hovertemplate: r.name + '<extra></extra>' });
   });
-  const lay = baseLayout(190, 'λ');
+  const lay = baseLayout(250, 'λ');
   lay.yaxis.range = [lo - step * (flags.length + 1.8), hi + step * 0.6];
   plot('ctx', tr, lay);
   document.getElementById('ctx-key').innerHTML =
@@ -483,7 +504,7 @@ function drawGenerators() {
     colorscale: [[0, css('--gs-off')], [0.25, css('--gs-off')], [0.25, css('--gs-min')], [0.5, css('--gs-min')],
                  [0.5, css('--gs-max')], [0.75, css('--gs-max')], [0.75, css('--gs-reg')], [1, css('--gs-reg')]],
   }] : [];
-  const lay = baseLayout(rows.length * 16 + 50, '', { hovermode: 'closest' });
+  const lay = baseLayout(rows.length * 22 + 60, '', { hovermode: 'closest' });
   lay.yaxis = { showgrid: false, zeroline: false, autorange: 'reversed', automargin: true, tickfont: { family: css('--mono'), size: 10.5, color: css('--muted') } };
   plot('gen', tr, lay);
   document.getElementById('gen-key').innerHTML =
@@ -512,12 +533,12 @@ function drawMain() {
       if (showCmp) tr.push(line(old[b], nm + ' · comparison', rgba(col, .7), 'dot', 1.1));
     });
   });
-  plot('main', tr, baseLayout(300, m), zeroBands());
+  plot('main', tr, baseLayout(440, m), zeroBands());
   const L = [];
   if (m === 'WSCR') L.push('<span><i class="sw" style="color:var(--accent)"></i>WSCR, all sites as one group</span>');
   else shownSites().forEach(s => L.push(`<span><i class="sw" style="color:var(${s.color})"></i>site ${s.label} · bus ${s[MET[m].key]}</span>`));
   if (m === 'ESCR' && single()) {
-    L.push('<span><i class="sw dash" style="color:var(--muted)"></i>ceiling SCMVA / P<sub>rated</sub> (all IF = 0)</span>');
+    L.push('<span><i class="sw dash" style="color:var(--muted)"></i>without interaction: SCMVA / P<sub>rated</sub> (all MIIF = 0)</span>');
     L.push('<span><i class="blk" style="background:var(--band);outline:1px solid var(--rule)"></i>interaction factors vanish</span>');
   }
   if (casesShown().length > 1) L.push(`<span><i class="sw" style="color:var(--muted)"></i>${CASE_SHORT(D.cases[0])}</span><span><i class="sw dash" style="color:var(--muted)"></i>other case</span>`);
@@ -535,12 +556,14 @@ function drawDrivers() {
   // terms shown per metric (author choice, 23 Oct 2026)
   if (m === 'SCR') {
     per('Short-circuit MVA at the POI', 'numerator; the denominator, rated MW, is constant', 'MVA', siteSeries((c, s) => vars(c, 'SCR', 'scmva')[s.poi]));
-    per('Pre-fault |V| at the POI', 'enters SCMVA = 100·|V| / |Z_ii| once', 'pu', siteSeries((c, s) => vars(c, 'SCR', 'v_pf')[s.poi]));
+    per('Pre-fault |V| at the POI', 'sets the fault current: SCMVA ≈ 100·|V| / |Z_ii|', 'pu', siteSeries((c, s) => vars(c, 'SCR', 'v_pf')[s.poi]));
   } else if (m === 'WSCR') {
-    per('Short-circuit MVA at each POI', 'averaged with fixed operating-MW weights', 'MVA', siteSeries((c, s) => vars(c, 'WSCR', 'scmva')[s.poi]));
+    per('Short-circuit MVA at each POI', 'averaged with rated-MW weights', 'MVA', siteSeries((c, s) => vars(c, 'WSCR', 'scmva')[s.poi]));
   } else if (m === 'ESCR') {
     per('Short-circuit MVA at the MV bus', 'numerator; the voltage step does not change it', 'MVA', siteSeries((c, s) => vars(c, 'ESCR', 'scmva')[s.escr]));
-    per('Interaction factors IF_j←i', 'seen at j when i is stepped +1 %; colour is the site seen', 'ratio', c => {
+    const vlabel = (VARIANTS.find(([v]) => v === st.variant) || [null, st.variant])[1];
+    per('Interaction factors MIIF_j←i', (st.variant === REFERENCE_VARIANT ? '|Z_ji / Z_ii|, the instant response'
+        : `response at j to a voltage step at i (${vlabel})`) + '; colour is the site seen', 'ratio', c => {
       const IF = vars(c, 'ESCR', 'if_magnitude'), out = [];
       shownSites().forEach(si => D.sites.forEach(sj => { if (sj.id !== si.id) out.push({ s: sj, y: IF[`${sj.escr}>${si.escr}`], name: `IF ${sj.label}←${si.label}`, dash: pairStyle(si) }); }));
       return out; }, { note2: styleNote('stepped'), zero: true });
@@ -559,14 +582,14 @@ function drawDrivers() {
   panels.forEach((p, k) => {
     const tr = [];
     casesShown().forEach(c => p.getter(c).forEach(sr => tr.push(line(sr.y, sr.name + (casesShown().length > 1 ? ' · ' + CASE_SHORT(c) : ''),
-      css(sr.s.color), st.case === 'both' && c !== D.cases[0] ? 'dash' : (sr.dash || 'solid'), 1.3))));
+      css(sr.s.color), !single() && c !== D.cases[0] ? 'dash' : (sr.dash || 'solid'), 1.3))));
     if (p.opts.switches) casesShown().forEach(c => shownSites().forEach(s => {
       const idx = idxWhere(vars(c, 'ESCR', 'probe_pv_changes')[s.escr], x => x > 0);
       const q = vars(c, 'ESCR', 'probe_reactive_power_mvar')[s.escr] || [];
       tr.push({ x: idx.map(i => D.T[i]), y: idx.map(i => q[i]), customdata: idx, type: 'scatter', mode: 'markers', name: `mode change · site ${s.label}`,
         marker: { symbol: 'circle-open', size: 6, color: css('--switch'), line: { width: 1.2, color: css('--switch') } }, hovertemplate: 'generator mode change<extra>site ' + s.label + '</extra>' });
     }));
-    const lay = baseLayout(190, p.unit, { margin: { l: 50, r: 8, t: 6, b: 32 } });
+    const lay = baseLayout(260, p.unit, { margin: { l: 50, r: 8, t: 6, b: 32 } });
     if (p.opts.zero) lay.yaxis.rangemode = 'tozero';
     plot('drv' + k, tr, lay, zeroBands());
   });
@@ -612,7 +635,7 @@ function drawCompare() {
   const range = ys.length ? [Math.min(...ys) * 0.97, Math.max(...ys) * 1.03] : undefined;
   const one = [{ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 1, y1: 1, layer: 'below', line: { color: css('--rule'), width: 1 } }];
   per.forEach((tr, k) => {
-    const lay = baseLayout(210, k === 0 ? (rel ? '× own median' : 'value') : '', { margin: { l: 50, r: 8, t: 6, b: 32 } });
+    const lay = baseLayout(290, k === 0 ? (rel ? '× own median' : 'value') : '', { margin: { l: 50, r: 8, t: 6, b: 32 } });
     if (range) lay.yaxis.range = range;
     plot('cmprel' + k, tr, lay, rel ? one : []);
   });
@@ -652,7 +675,7 @@ function drawMinima() {
         marker: { symbol: c === ref ? 'circle' : 'circle-open', size: 10, color, line: { width: 1.6, color } },
         hovertemplate: `${fmt(y[h])}${base ? ` · ${fmt(y[h] / base)}× own median` : ''}<br>%{x|%a %d %H:%M}<extra>${lbl} minimum</extra>` });
     }));
-    const lay = baseLayout(labels.length * 24 + 44, '', { hovermode: 'closest', margin: { l: 10, r: 10, t: 6, b: 32 } });
+    const lay = baseLayout(labels.length * 32 + 50, '', { hovermode: 'closest', margin: { l: 10, r: 10, t: 6, b: 32 } });
     Object.assign(lay.xaxis, { range: xr, showgrid: true, gridcolor: css('--grid') });
     lay.yaxis = { type: 'category', categoryorder: 'array', categoryarray: labels, autorange: 'reversed', showgrid: true, gridcolor: css('--grid'),
                   zeroline: false, automargin: true, tickfont: { family: css('--mono'), size: 10.5, color: css('--muted') } };
@@ -702,8 +725,23 @@ function tabs(id, items, key) {
   box.innerHTML = items.map(([v, t]) => `<button type="button" data-v="${v}">${t}</button>`).join('');
   box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { st[key] = b.dataset.v; save(); render(); }));
 }
+function rebuild() {
+  D = build(RAW);
+  if (CMP_RAW) CMP = buildCompare(CMP_RAW);
+  if (!D.cases.includes(st.case)) st.case = D.cases[0];
+  buildControls(); save(); render();
+}
 function buildControls() {
-  tabs('case', D.cases.map(c => [c, CASE_LABEL(c)]).concat(D.cases.length > 1 ? [['both', 'Both']] : []), 'case');
+  const cm = document.getElementById('commitment');
+  cm.innerHTML = COMMITMENTS.map(([v, t]) => `<button type="button" data-v="${v}">${t}</button>`).join('');
+  cm.querySelectorAll('button').forEach(b => b.onclick = () => { st.commitment = b.dataset.v; rebuild(); });
+  const vs = document.getElementById('variant');
+  vs.innerHTML = VARIANTS.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  vs.onchange = () => { st.variant = vs.value; rebuild(); };
+  const cs = document.getElementById('case');
+  cs.innerHTML = D.cases.map(c => `<option value="${c}">${CASE_LABEL(c)}</option>`).join('');
+  cs.onchange = () => { st.case = cs.value; save(); render(); };
+  document.getElementById('overlay').onchange = e => { st.overlay = e.target.checked; save(); render(); };
   tabs('metric', D.metricList.map(m => [m, m]).concat([['Compare', 'Compare']]), 'metric');
   tabs('cmp-scale', [['rel', '× own median'], ['abs', 'Value']], 'cmpScale');
   const sb = document.getElementById('sites');
@@ -716,16 +754,29 @@ function buildControls() {
 }
 function syncControls() {
   const press = (id, v) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
-  press('case', st.case); press('metric', st.metric); press('cmp-scale', st.cmpScale);
+  document.getElementById('case').value = st.case;
+  const ov = document.getElementById('overlay'), intactOnly = st.case === D.cases[0];
+  ov.checked = st.overlay && !intactOnly; ov.disabled = intactOnly;
+  document.getElementById('overlay-toggle').classList.toggle('disabled', intactOnly);
+  press('metric', st.metric); press('cmp-scale', st.cmpScale); press('commitment', st.commitment);
+  document.getElementById('variant').value = st.variant;
+  document.getElementById('variant-group').hidden = !(st.metric === 'ESCR' || st.metric === 'Compare');
   document.querySelectorAll('#sites .chip').forEach(b => b.setAttribute('aria-pressed', String(st.sites.has(Number(b.dataset.s)))));
   const t = document.getElementById('cmp'); t.checked = st.cmp && !!CMP; t.disabled = !CMP;
   document.getElementById('cmp-toggle').classList.toggle('disabled', !CMP);
 }
 const KEY = 'glover-strength-explorer';
-function save() { try { localStorage.setItem(KEY, JSON.stringify({ case: st.case, metric: st.metric, sites: [...st.sites], cmp: st.cmp, cmpScale: st.cmpScale })); } catch (e) {} }
+function save() { try { localStorage.setItem(KEY, JSON.stringify({ case: st.case, overlay: st.overlay, commitment: st.commitment, variant: st.variant, metric: st.metric, sites: [...st.sites], cmp: st.cmp, cmpScale: st.cmpScale })); } catch (e) {} }
+function savedPrefs() { try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { return null; } }
+function restoreView() {
+  const v = savedPrefs();
+  st.commitment = v && COMMITMENTS.some(([c]) => c === v.commitment) ? v.commitment : 'sequential';
+  st.variant = v && VARIANTS.some(([c]) => c === v.variant) ? v.variant : REFERENCE_VARIANT;
+}
 function restore() {
-  let v = null; try { v = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
-  st.case = v && (D.cases.includes(v.case) || (v.case === 'both' && D.cases.length > 1)) ? v.case : D.cases[0];
+  const v = savedPrefs();
+  st.case = v && D.cases.includes(v.case) ? v.case : D.cases[0];
+  st.overlay = v ? v.overlay !== false : true;
   st.metric = v && (D.metricList.includes(v.metric) || v.metric === 'Compare') ? v.metric : (D.metricList.includes('ESCR') ? 'ESCR' : D.metricList[0]);
   const ids = new Set(D.sites.map(s => s.id));
   st.sites = new Set(v && v.sites ? v.sites.filter(x => ids.has(x)) : [...ids]); if (!st.sites.size) st.sites = new Set(ids);
@@ -756,16 +807,17 @@ async function load() {
   if (!window.Plotly) { showStatus('The charts could not load because plotly.js from cdnjs is unreachable. Check the connection and press Reload.', true); return; }
   showStatus('Loading results…');
   try {
-    const files = source.runFiles ? await readFromPicker(source.runFiles) : await readFromUrl(source.run);
-    D = build(files);
+    RAW = source.runFiles ? await readFromPicker(source.runFiles) : await readFromUrl(source.run);
+    restoreView();
+    D = build(RAW);
   } catch (e) {
     const hint = location.protocol === 'file:' ? ' Opened straight from disk, the browser does not let the page read these files. Run <code>python tools/explorer.py</code> from the repository, or use <b>Choose results folder</b> and pick <code>results/glover37/raw</code>.' : '';
     showStatus(`The results in <code>${source.runFiles ? folderName(source.runFiles) : source.run}</code> could not be read (${e.message}).${hint}`, true);
     document.getElementById('app').hidden = true; return;
   }
-  CMP = null;
+  CMP = null; CMP_RAW = null;
   if (source.cmpFiles || source.compare) {
-    try { CMP = buildCompare(source.cmpFiles ? await readFromPicker(source.cmpFiles) : await readFromUrl(source.compare)); }
+    try { CMP_RAW = source.cmpFiles ? await readFromPicker(source.cmpFiles) : await readFromUrl(source.compare); CMP = buildCompare(CMP_RAW); }
     catch (e) { showStatus(`The run loaded, but the comparison folder could not be read (${e.message}).`, true); }
   }
   if (!D.N || !D.cases.length) { showStatus('This results folder has no states to show.', true); return; }

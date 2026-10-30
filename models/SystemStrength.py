@@ -261,10 +261,7 @@ class ESCR(_MetricHistory):
         for i in buses:
             q_mvar, target_mag, actual_mag, v_new, changes = self._solve_voltage_step(
                 net, v_pf, i, relative_step, base_state)
-            pv_changes[i] = len(changes)
-            if changes:
-                warnings.warn(f'{step}: ESCR probe {relative_step:g} at bus {i} changed generator '
-                              f'states {changes} (bus: (base, probe); 0 PV, +1 Qmax, -1 Qmin)')
+            pv_changes[i] = len(changes)  # generator mode changes during the step (recorded, not warned)
             probe_q[i] = q_mvar
             target_v[i] = target_mag
             actual_v[i] = actual_mag

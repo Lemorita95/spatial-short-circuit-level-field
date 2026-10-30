@@ -902,6 +902,8 @@ def draw_bus(
     value: float | None = None,
     show_value: bool = False,
     font_size: float = FIGURE_FONT_SIZE_PT,
+    label_color: str = "black",
+    label_weight: str = "normal",
 ) -> None:
     """
     Draw one bus rectangle and its paper label.
@@ -978,7 +980,8 @@ def draw_bus(
         fontsize=font_size,
         ha="left",
         va="bottom",
-        color="black",
+        color=label_color,
+        fontweight=label_weight,
         clip_on=False,
         zorder=30,
     )
@@ -1176,6 +1179,27 @@ def save_figure(
 # =====================================================================
 # Network diagram
 # =====================================================================
+
+def draw_network(ax, items=(), bus_colors=None):
+    """Draw the benchmark topology onto `ax`; `bus_colors` {bus number: color} fills and
+    labels those buses in that color."""
+    bus_colors = bus_colors or {}
+    model = parse_axd(AXD_FILE)
+    draw_network_background(ax, model)
+    for bus in model.buses:
+        color = bus_colors.get(bus.number)
+        draw_bus(ax, model, bus, facecolor=color or "white", font_size=FIGURE_FONT_SIZE_PT,
+                 label_color=color or "black", label_weight="bold" if color else "normal")
+    for item in items:
+        if item["kind"] == "generator":
+            generator = find_generator(model, bus=item["bus"], gen_id=item["gen_id"])
+            draw_highlighted_generator(ax, generator, tag=item["tag"])
+        else:
+            edge = find_edge(model, kind=item["kind"], from_bus=item["from_bus"],
+                             to_bus=item["to_bus"], circuit=item["circuit"])
+            draw_highlighted_edge(ax, edge, tag=item["tag"])
+    return model
+
 
 def render_network(
     items=(),

@@ -1,6 +1,5 @@
 import numpy as np
 import cmath
-import math
 
 FAULT_MODELS = ('constant_current', 'k_factor')
 

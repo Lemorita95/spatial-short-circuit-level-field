@@ -16,7 +16,7 @@ Run from repository root:
     python -m experiments.glover37.simulate run --hours 2
     python -m experiments.glover37.simulate run \
         --contingencies results/glover37/raw/contingency_set.csv
-    # intact + line 39-47 only (the v1.0 results, c263896):
+    # intact + line 39-47 only:
     python -m experiments.glover37.simulate run \
         --contingencies results/glover37/raw/contingency_set.csv --case line_39_47_out
 
@@ -295,7 +295,7 @@ def evaluate_state(task, voltage_limits):
         'SDSCR': SDSCR(rated['SDSCR']),
     }
     key = {'hour_index': h, 'timestamp': str(timestamp), 'case': case, 'commitment': commitment}
-    out = {'results': [], 'variables': [], 'dispatch': [], 'error': None}
+    out = {'results': [], 'variables': [], 'dispatch': [], 'error': None, 'switches': {}}
     for network_name, dispatch, online in [('base', base_dispatch, base_on),
                                            ('ibr', ibr_dispatch, ibr_on)]:
         for gen in limits:
@@ -348,6 +348,8 @@ def evaluate_state(task, voltage_limits):
         for variant_key, record in evaluate('ESCR', aug_net, aug_v,
                                             pv_state=aug_pf.pv_state).items():
             variant = variant_name(variant_key)
+            if 'probe_pv_changes' in record:  # sites whose probe changed a generator's mode
+                out['switches'][variant] = sum(n > 0 for n in record['probe_pv_changes'].values())
             terms = ESCR_TERMS.get(variant, ('value', 'if_magnitude'))
             emit_metric(out['results'], out['variables'], 'ESCR',
                         {t: record[t] for t in terms}, key, variant)
@@ -374,6 +376,7 @@ def evaluate_temporal(week, *, contingencies=(), out_dir=RAW_DIR,
     voltage_limits = voltage_limits or VoltageLimits.preset()
     tasks = state_tasks(week, contingencies)
     results, variables, statuses, dispatch_rows = [], [], [], []
+    switches = Counter()
     fn = functools.partial(evaluate_state, voltage_limits=voltage_limits)
     with parallel_map(fn, tasks, workers) as outcomes:
         for (h, timestamp, _, commitment, case, _), out in zip(tasks, outcomes):
@@ -383,13 +386,14 @@ def evaluate_temporal(week, *, contingencies=(), out_dir=RAW_DIR,
             variables += out['variables']
             dispatch_rows += out['dispatch']
             statuses.append(out['state'])
+            switches.update(out['switches'])
             if out['error'] is not None:
                 # Fail visibly; never silently treat missing hours as valid.
                 write_outputs(out_dir, results, variables, statuses, dispatch_rows)
                 raise RuntimeError(f'Failed at hour={h}, {commitment}, case={case}: {out["error"]}')
 
     write_outputs(out_dir, results, variables, statuses, dispatch_rows)
-    return len(statuses)
+    return {'states': len(statuses), 'probe_mode_switches': dict(sorted(switches.items()))}
 
 
 KEY_COLUMNS = ['hour_index', 'timestamp', 'case', 'commitment']
@@ -421,7 +425,7 @@ def run(week, output, *, contingencies=(), contingency_file=None, voltage_limits
     output.parent.mkdir(parents=True, exist_ok=True)
     temp_output = Path(tempfile.mkdtemp(prefix='.strength-run-', dir=output.parent))
     try:
-        n_states = evaluate_temporal(week, contingencies=contingencies, out_dir=temp_output,
+        counts = evaluate_temporal(week, contingencies=contingencies, out_dir=temp_output,
                                      voltage_limits=voltage_limits, workers=workers)
         output.mkdir(parents=True, exist_ok=True)
         for filename in RUN_FILES:
@@ -431,11 +435,12 @@ def run(week, output, *, contingencies=(), contingency_file=None, voltage_limits
         inputs = [CASE_FILE, GEN_LIMITS_FILE, SE3_FILE] + ([contingency_file] if contingency_file else [])
         manifest.write(output, 'simulate', started=started, inputs=inputs,
                        outputs=[output / f for f in RUN_FILES],
-                       extra={'hours': int(len(week)), 'states': n_states, 'workers': workers,
+                       extra={'hours': int(len(week)), **counts, 'workers': workers,
                               'cases': [INTACT] + [c for c, _ in contingencies]})
         print('\nSaved results to', output)
-        print('States evaluated:', n_states)
-        return n_states
+        print('States evaluated:', counts['states'])
+        print('Probe generator mode changes (site-states):', counts['probe_mode_switches'])
+        return counts
     finally:
         shutil.rmtree(temp_output, ignore_errors=True)
 

@@ -29,7 +29,7 @@ help:
 	@echo "  make validate          E0: PowerWorld agreement, base + A1-A3, B1-B3"
 	@echo "  make screen            Fix the N-1 line set (islanding, convergence)"
 	@echo "  make simulate          168 h metrics run: every state (E1, E2, E5), every ESCR MIIF variant"
-	@echo "  make analyze           Gate 4 v2 analysis of the existing raw results"
+	@echo "  make analyze           Analysis of the existing raw results (claims C1-C9)"
 	@echo "  make report            Figures from the existing analysis"
 	@echo "  make layout            Network one-line diagram"
 	@echo

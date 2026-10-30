@@ -1,4 +1,4 @@
-"""Checks of the analysis stage (experiments.glover37.analyze), evidence plan v2 (stdlib unittest).
+"""Checks of the analysis stage (experiments.glover37.analyze) (stdlib unittest).
 
 - planted answers for the D1 attribution and the exact log decomposition;
 - an integration run on a fresh 3-hour simulation (intact, line 39-47 and both
@@ -10,6 +10,7 @@ Run from the repository root:
 """
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 import warnings
@@ -111,7 +112,7 @@ class TestIntegration(unittest.TestCase):
                      ).to_csv(cls.raw / 'contingency_set.csv', index=False)
         cls.week = select_week(read_se3(SE3_FILE)).iloc[:3]
         contingencies = rsm.read_contingencies(cls.raw / 'contingency_set.csv')
-        quiet(rsm.evaluate_temporal, cls.week, contingencies=contingencies, out_dir=cls.raw)
+        quiet(rsm.run, cls.week, cls.raw, contingencies=contingencies)
         cls.out = quiet(asm.run, cls.raw, Path(cls._tmp.name) / 'analysis')
 
     @classmethod
@@ -164,10 +165,57 @@ class TestIntegration(unittest.TestCase):
                                     {m: asm.P_MW[asm.AS_RUN[m]] for m in asm.METRICS})
         self.assertAlmostEqual(asm.coupling_load(values, 'ESCR', site, 'intact').loc[0], expected, places=12)
 
+    def test_e5_and_t3(self):
+        # E5 (every unit online) is analysed on the intact network only; T3 pairs it with E1
+        t3 = self.out['t3_commitment']
+        self.assertEqual(len(t3), len(asm.UNITS))
+        self.assertTrue((t3['E5_n_committed'] == 7).all())
+        self.assertEqual(set(self.out['e5_weakest_hour']['case']), {'intact'})
+        for name in ('d5_snapshots', 'e5_snapshots'):
+            t = self.out[name]
+            self.assertTrue((t['g'] >= -1e-12).all() and (t['g_minimum'] >= -1e-12).all())
+
+    def test_tables_tagged(self):
+        # every output table names a known experiment and the RQ/dimension it serves
+        from experiments.glover37.config import EXPERIMENTS
+        analysis = Path(self._tmp.name) / 'analysis'
+        for path in analysis.glob('*.csv'):
+            if path.stem == 'summary':
+                continue
+            t = pd.read_csv(path)
+            self.assertEqual(list(t.columns[:2]), ['experiment', 'serves'], path.stem)
+            ids = {i for cell in t['experiment'].astype(str) for i in cell.split(';')}
+            self.assertTrue(ids and ids <= set(EXPERIMENTS), (path.stem, ids))
+            self.assertTrue(t['serves'].astype(str).str.len().gt(0).all(), path.stem)
+
+    def test_report_text(self):
+        # every claim and caption has rows in summary.csv, and report.md quotes exactly those
+        from experiments.glover37 import report
+        summary = self.out['summary']
+        claims = summary[summary['claim'].str.match(r'^(C\d|captions)')]
+        self.assertEqual({c.split(' ')[0] for c in claims['claim']},
+                         {'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'captions'})
+        text = report.build_report(Path(self._tmp.name) / 'analysis', self.raw)
+        for r in claims.itertuples():
+            self.assertIn(f'- {r.item}: **{r.result}**', text)
+
     def test_outputs_written(self):
         analysis = Path(self._tmp.name) / 'analysis'
         self.assertEqual({p.stem for p in analysis.glob('*.csv')}, set(self.out))
         self.assertTrue((analysis / 'manifest.json').is_file())
+
+    def test_analysis_manifest_names_raw_run(self):
+        raw = json.loads((self.raw / 'manifest.json').read_text())
+        analysis = json.loads((Path(self._tmp.name) / 'analysis' / 'manifest.json').read_text())
+        self.assertEqual(analysis['raw_run_id'], raw['run_id'])
+
+    def test_rejects_raw_without_manifest(self):
+        bare = Path(self._tmp.name) / 'bare'
+        bare.mkdir()
+        for f in asm.INPUT_FILES:
+            (bare / f).write_bytes((self.raw / f).read_bytes())
+        with self.assertRaises(ValueError):
+            quiet(asm.run, bare, Path(self._tmp.name) / 'bare_out')
 
     def test_rejects_input_as_output(self):
         with self.assertRaises(ValueError):

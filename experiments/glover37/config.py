@@ -1,10 +1,9 @@
 """Every parameter of the system-strength study, in one place.
 
-Sites and equipment (Gate 2), the week and commitment rules, the contingency
+Sites and equipment, the week and commitment rules, the contingency
 rule, the short-circuit and interaction-factor conventions, the experiments
-(E0-E5), the PowerWorld validation states (E0) and the analysis definitions
-approved at Gate 4 (evidence plan v2). Nothing here runs a calculation; the
-other modules of this package import from it.
+(E0-E5), the PowerWorld validation states (E0) and the analysis and text
+thresholds. Nothing here runs a calculation; the other modules import from it.
 """
 from __future__ import annotations
 
@@ -54,7 +53,7 @@ SEQUENTIAL, ALL_ONLINE = "sequential", "all_online"
 COMMITMENT_RULES = (SEQUENTIAL, ALL_ONLINE)
 
 # =============================================================================
-# 3. IBR sites (Gate 2)
+# 3. IBR sites
 # =============================================================================
 # All branch impedances are on the 100 MVA system base. Transformer per-unit
 # nominal taps are unity because the 69/34.5/0.69 kV voltage bases follow the
@@ -137,6 +136,23 @@ EVAL_BUS = {
     "ESCR": {str(s.host_bus): s.escr_bus for s in SITES},
     "SDSCR": {str(s.host_bus): s.sdscr_bus for s in SITES},
 }
+# Evaluation point and voltage level of each metric (T1)
+EVAL_POINT = {"SCR": ("host bus", HV_KV), "WSCR": ("host bus", HV_KV),
+              "ESCR": ("padmount", MV_KV), "SDSCR": ("converter terminal", LV_KV)}
+# Definitions as computed (T1, LaTeX). S_i: SCMVA = S_base |I_f| (V_n = 1 pu) from a bolted
+# fault (SCC_NR) at the actual pre-fault state; P: rated MW; Z: Y_SCC^-1 (builder).
+METRIC_DEFINITIONS = {
+    "SCR": {"formula": r"$S_i / P_i$", "interaction": "none",
+            "source": "IEEE 2800-2022"},
+    "WSCR": {"formula": r"$\sum_i S_i P_i \,/\, (\sum_i P_i)^2$", "interaction": r"weights $P_i$",
+             "source": "IEEE 2800-2022"},
+    "ESCR": {"formula": r"$S_i \,/\, (P_i + \sum_{j \ne i} \mathrm{MIIF}_{ji} P_j)$",
+             "interaction": r"$\mathrm{MIIF}_{ji} = |Z_{ji}/Z_{ii}|$",
+             "source": "CIGRE multi-infeed brochure, eq. (1-4), $Q_f = 0$"},
+    "SDSCR": {"formula": r"$|V_i|^2 \,/\, (|Z_{ii}|\,|P_i + \sum_{j \ne i} w_{ij} P_j|)$",
+              "interaction": r"$w_{ij} = (Z_{ij}/Z_{ii})\,(V_i/V_j)^*$",
+              "source": "Wu et al. (2018)"},
+}
 
 # Short circuit (SCC_NR): SCMVA = S_BASE_MVA * V_n * |I_f| with V_n = 1 pu, from a
 # bolted fault (fault impedance FAULT_Z_PU, the solver default) started from the
@@ -171,15 +187,18 @@ VOLTAGE_PRESET = "default"
 INTACT = "intact"
 
 # =============================================================================
-# 5. Analysis definitions (Gate 4, evidence plan v2)
+# 5. Analysis definitions
 # =============================================================================
 
 REL_TIE = 1e-9
-IF_ZERO = 3e-5  # IF ≈ 0 state: every IF < 3e-5 (Gate 3 record, file 02 §5)
+# Text and caption numbers (analyze writes them, report formats them)
+F3_FLOOR_PCT = -20.0      # F3 display window: weakenings beyond it are not drawn, only counted
+NEAR_MIN_PCT = 1.0        # "within x % of the weekly minimum" (E5 flatness, C2)
+MATERIAL_PCT = 1.0        # "> x % stronger" (C6-C8)
 RECONSTRUCTION_TOL = 1e-9
 
 # =============================================================================
-# 6. Experiments (06 §1-2). Each raw row's experiment follows from its commitment
+# 6. Experiments, each tied to the research questions it serves. Each raw row's experiment follows from its commitment
 # rule and case (experiment_of); E3 is the ESCR variants other than the reference.
 # RQ/D is looked up here, never stored per raw row.
 # =============================================================================

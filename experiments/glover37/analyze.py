@@ -1,14 +1,15 @@
 """
-Analyze the system-strength metrics experiment: Gate 4, evidence plan v2.
+Analysis stage of the system-strength metrics study.
 
-Plan: current_research_handoff/05_GATE3.5_LITERATURE_EXTRACTION.md, Part E.
 Every claim is an observation, a mechanism (the formula term responsible) and a
 confirmation: that term is isolated, and the effect must disappear or be
 accounted for. No network, power-flow or short-circuit calculation is performed.
 
-Inputs: the sequential-commitment states (E1, E2) of results/glover37/raw/. ESCR is
-read with its reference MIIF (config REFERENCE_VARIANT); the IF-step check reads the
-probe variants of the same run. All denominators are rated MW.
+Inputs: results/glover37/raw/ (one simulate run and its manifest). The core claims use
+the sequential-commitment states (E1 intact, E2 outages); E5 (all generators on line,
+intact) is analysed alongside. ESCR is read with its reference MIIF (config
+REFERENCE_VARIANT); the MIIF check (E3) reads the probe variants of the same run. All
+denominators are rated MW.
 
 Common basis: SCMVA_i from the short-circuit solver, Z = Y_SCC^-1 from its builder:
 
@@ -34,30 +35,26 @@ solver's fault-impedance term (about 1e-5). SCR and WSCR have no coupling term
 
 Coupling load, the interaction a site carries relative to its own power:
     ESCR  k_i = Σ IF_ji P_j / P_i          SDSCR  k_i = |P_i + Σ w_ij P_j| / P_i - 1
-An outage that decouples the sites lowers k, which raises ESCR and SDSCR even
-while the network weakens.
+An outage that lowers k raises the metric while the network weakens; whether that
+explains a metric's "stronger" hours is tested by removing the coupling term (C7).
 
-Claims (Part E §4) and tables
------------------------------
-D1/RQ2  The weakest hour is a minimum-commitment hour (B_count); exceptions are
-        traced to |V| or coupling                       -> d1_weakest_hour
-D4      In network terms (Z_ii only) an outage weakens a site or leaves it
-        practically unaffected                          -> d4_outage
-D4      Measured per hour, contingency and site: metric_contingency > metric_intact
-        ("stronger"). The coupling metrics are stronger when the outage decouples
-        the sites (coupling load k falls)                -> d4_outage
-        r per hour, corridor, metric and site (histograms)  -> d4_hourly
-D5      The light-load snapshot almost finds the weekly minimum
-                                                         -> d5_snapshots, d5_dispatch
-A3      Rated and MVA denominators change no conclusion
-                                                         -> a3_denominators
-check   Parallel circuits agree with circuit 1          -> parallel_circuits
-check   ESCR conclusions under the probe MIIF variants (E3)
-                                                         -> miif_variants
-summary.csv: one line per result, traced to its claim.
+Tables (each carries `experiment` and `serves`, see TABLE_TAGS)
+---------------------------------------------------------------
+d1_weakest_hour     weakest hour, its attribution to Z_ii, |V|, coupling   (E1, E2; D1, RQ2)
+d4_outage           per corridor and site: shares stronger, Δln parts, coupling load (E2; D4)
+d4_hourly           r and the network-only r per hour, corridor and site   (E2; D4, F3)
+d5_snapshots        minimum-load and worse-of-two snapshot gaps            (E1, E2; D5)
+d5_dispatch         commitment against load scale                          (E1; D5)
+e5_weakest_hour, e5_snapshots   the same with every generator on line      (E5; RQ2, D5)
+t3_commitment       E1 against E5 per metric and site                      (E1, E5; RQ2, D5)
+miif_variants, miif_hourly      ESCR under each MIIF variant               (E3; RQ3)
+a3_denominators, parallel_circuits, reconstruction_check                  checks
+summary.csv         the inputs, then one row per number the text and captions quote
+                    (claims C1-C9, captions), with its source table
 
 Scenarios: intact plus one outage per corridor; circuit 1 represents a corridor
-of parallel circuits (Part E §5). D4 counts corridors.
+of parallel circuits, whose other circuits are checked against it (parallel_circuits).
+D4 counts corridors.
 
 Usage
 -----
@@ -77,14 +74,44 @@ import pandas as pd
 
 from experiments.glover37 import manifest
 from experiments.glover37.config import (
-    ANALYSIS_DIR, AS_RUN, EVAL_BUS, IF_ZERO, INTACT, METRICS, NETWORK, PROBE_VARIANTS, RAW_DIR,
-    RECONSTRUCTION_TOL, REFERENCE_VARIANT, REL_TIE, S_BASE_MVA, SEQUENTIAL, SITES,
+    ANALYSIS_DIR, AS_RUN, EVAL_BUS, INTACT, METRICS, NETWORK, PROBE_VARIANTS, RAW_DIR,
+    ALL_ONLINE, F3_FLOOR_PCT, MATERIAL_PCT, NEAR_MIN_PCT, RECONSTRUCTION_TOL, REFERENCE_VARIANT, REL_TIE, S_BASE_MVA, SEQUENTIAL, SITES,
 )
 
 DEFAULT_INPUT = RAW_DIR
 DEFAULT_OUTPUT = ANALYSIS_DIR
 INPUT_FILES = ("metrics_timeseries.csv", "metric_variables.csv", "run_summary.csv",
                "dispatch_schedule.csv", "contingency_set.csv")
+# Traceability: the experiment(s) and RQ/dimension each output table serves. "by case" takes
+# the experiment from the row's case (intact: E1, an outage: E2) under sequential commitment.
+TABLE_TAGS = {
+    "reconstruction_check": ("E1;E2", "check"),
+    "d1_weakest_hour": ("by case", "RQ1-D1;RQ2"),
+    "d4_outage": ("E2", "RQ1-D4"),
+    "d4_hourly": ("E2", "RQ1-D4"),
+    "d5_snapshots": ("by case", "RQ1-D5"),
+    "d5_dispatch": ("E1", "RQ1-D5"),
+    "a3_denominators": ("E1;E2", "check"),
+    "parallel_circuits": ("E2", "check"),
+    "miif_variants": ("E3", "RQ3;RQ1-D4"),
+    "miif_hourly": ("E3", "RQ3;RQ1-D4"),
+    "e5_weakest_hour": ("E5", "RQ2;RQ1-D1"),
+    "e5_snapshots": ("E5", "RQ2;RQ1-D5"),
+    "t3_commitment": ("E1;E5", "RQ2;RQ1-D5"),
+}
+
+
+def tag(name, frame):
+    """The table with `experiment` and `serves` as its first columns."""
+    experiment, serves = TABLE_TAGS[name]
+    frame = frame.copy()
+    if experiment == "by case":
+        experiment = np.where(frame["case"] == INTACT, "E1", "E2")
+    frame.insert(0, "serves", serves)
+    frame.insert(0, "experiment", experiment)
+    return frame
+
+
 # ESCR terms written once per state, with the reference variant
 SHARED_ESCR_TERMS = ("scmva", "rated_mw", "z_ii", "v_pf")
 
@@ -140,11 +167,12 @@ def read_run(input_dir):
     }
 
 
-def view(run, variant=REFERENCE_VARIANT):
-    """The sequential-commitment states (E1, E2) with ESCR read through one MIIF variant;
-    the ESCR terms shared by every variant come from the reference rows."""
+def view(run, variant=REFERENCE_VARIANT, commitment=SEQUENTIAL):
+    """The states of one commitment rule (sequential: E1, E2; all_online: E5) with ESCR
+    read through one MIIF variant; the ESCR terms shared by every variant come from the
+    reference rows."""
     def sequential(frame):
-        return frame[frame["commitment"] == SEQUENTIAL].drop(columns="commitment")
+        return frame[frame["commitment"] == commitment].drop(columns="commitment")
 
     metrics = sequential(run["metrics"])
     metrics = metrics[metrics["variant"].isin(("", variant))].drop(columns="variant")
@@ -162,6 +190,7 @@ def view(run, variant=REFERENCE_VARIANT):
         "contingencies": run["contingencies"],
         "sha256": run["sha256"],
         "variant": variant,
+        "commitment": commitment,
     }
 
 
@@ -177,10 +206,12 @@ def scenarios(contingencies):
     return corridors, representative
 
 
-def check_inputs(data):
-    """Fail on anything incomplete; never treat a missing state as valid."""
+def check_inputs(data, cases=None):
+    """Fail on anything incomplete; never treat a missing state as valid. `cases`: the
+    expected cases (default: intact plus every included contingency)."""
     summary, metrics = data["summary"], data["metrics"]
-    cases = [INTACT] + list(data["contingencies"].query("included")["case"])
+    if cases is None:
+        cases = [INTACT] + list(data["contingencies"].query("included")["case"])
     if set(summary["case"]) != set(cases):
         raise ValueError(f"run_summary cases differ from contingency_set: "
                          f"{sorted(set(cases) ^ set(summary['case']))}")
@@ -320,7 +351,7 @@ def split(values, metric, site, frm, to):
 
 
 # =============================================================================
-# 3. Context: load scale, commitment, IF ≈ 0 states
+# 3. Context: load scale, commitment
 # =============================================================================
 
 def lowest(s, k):
@@ -345,9 +376,8 @@ def build_context(data, hours):
         n = intact[column].astype(int)
         n_committed[network] = n
         b_count[network] = set(n.index[n == n.min()])
-    if_max = _wide(data["variables"], "ESCR", "if_magnitude", pair=True).max(axis=1)
     return {"hours": hours, "load_scale": intact["load_scale"], "n_committed": n_committed,
-            "b_count": b_count, "if_zero": if_max < IF_ZERO}
+            "b_count": b_count}
 
 
 # =============================================================================
@@ -394,7 +424,6 @@ def d1_weakest_hour(values, ctx, cases):
 
 def d4_outage(values, ctx, corridors):
     rows = []
-    if_zero = ctx["if_zero"]
     for case in corridors:
         for metric, site in UNITS:
             ln = {v: np.log(series(values, v, metric, site, case)
@@ -402,7 +431,6 @@ def d4_outage(values, ctx, corridors):
             part_v, part_c, part_z = ln["m"] - ln["noV"], ln["noV"] - ln["Z"], ln["Z"]
             # stronger: metric_contingency > metric_intact in that hour
             stronger = sign0(ln["m"]) > 0
-            if_out = if_zero.xs(case, level="case").reindex(ln["m"].index).to_numpy()
             k_int, k_out = coupling_load(values, metric, site, INTACT), coupling_load(values, metric, site, case)
             r = np.expm1(ln["m"])
             rows.append({
@@ -424,26 +452,26 @@ def d4_outage(values, ctx, corridors):
                 "max_r_stronger": float(r[stronger].max()) if stronger.any() else float("nan"),
                 "median_dln_Z_ii_stronger": float(part_z[stronger].median()) if stronger.any() else float("nan"),
                 "n_stronger_coupling_load_falls": int((stronger & (sign0(k_out - k_int) < 0)).sum()),
-                "n_stronger_IF_zero_outage": int((stronger & if_out).sum()),
             })
     return pd.DataFrame(rows)
 
 
 def d5_snapshots(values, ctx, cases):
     lam = ctx["load_scale"]
-    peak, light = int(lam.idxmax()), int(lam.idxmin())
+    peak, minimum = int(lam.idxmax()), int(lam.idxmin())
     rows = []
     for case in cases:
         for metric, site in UNITS:
             s = series(values, "m", metric, site, case)
             t = t_star(s)
-            snap = peak if s.loc[peak] <= s.loc[light] else light
+            snap = peak if s.loc[peak] <= s.loc[minimum] else minimum
             rows.append({
-                "case": case, "metric": metric, "site": site, "t_peak": peak, "t_light": light,
-                "t_light_in_B_count": light in ctx["b_count"][NETWORK[metric]],
+                "case": case, "metric": metric, "site": site, "t_peak": peak, "t_minimum": minimum,
+                "t_minimum_in_B_count": minimum in ctx["b_count"][NETWORK[metric]],
                 "t_snapshot": snap, "t_star": _join(t), "snapshot_is_weekly_min": snap in t,
                 "snapshot_value": float(s.loc[snap]), "weekly_min_value": float(s.min()),
-                "g": float(s.loc[snap] / s.min() - 1),
+                "g": float(s.loc[snap] / s.min() - 1),  # worse of peak and minimum load
+                "g_minimum": float(s.loc[minimum] / s.min() - 1),
                 # from the weekly minimum to the snapshot
                 **split(values, metric, site, (case, t[0]), (case, snap)),
             })
@@ -463,14 +491,53 @@ def d5_dispatch(ctx):
     return pd.DataFrame(rows)
 
 
+def t3_commitment(d1_e1, d5_e1, ctx_e1, d1_e5, d5_e5, ctx_e5):
+    """T3 (draft): intact network, E1 (sequential commitment) against E5 (all units
+    online), per metric and site: weakest hour, load scale and committed units there,
+    and the snapshot gaps (minimum load; worse of peak and minimum load), in %."""
+    rows = {}
+    for tag, d1, d5, ctx in (("E1", d1_e1, d5_e1, ctx_e1), ("E5", d1_e5, d5_e5, ctx_e5)):
+        d1 = d1[d1["case"] == INTACT].set_index(["metric", "site"])
+        d5 = d5[d5["case"] == INTACT].set_index(["metric", "site"])
+        for (metric, site), r in d1.iterrows():
+            t = int(str(r["t_star"]).split(";")[0])
+            rows.setdefault((metric, site), {"metric": metric, "site": site}).update({
+                f"{tag}_t_star": t,
+                f"{tag}_load_scale": float(ctx["load_scale"].loc[t]),
+                f"{tag}_n_committed": int(ctx["n_committed"][NETWORK[metric]].loc[t]),
+                f"{tag}_gap_minimum_pct": 100 * float(d5.loc[(metric, site), "g_minimum"]),
+                f"{tag}_gap_worse_pct": 100 * float(d5.loc[(metric, site), "g"]),
+            })
+    return pd.DataFrame(list(rows.values()))
+
+
 def d4_hourly(values, corridors):
-    """r = (metric_contingency - metric_intact) / metric_intact, per hour, corridor and site."""
+    """Per hour, corridor and site: r = (metric_contingency - metric_intact) / metric_intact,
+    and r_network, the same ratio with Z_ii only (|V| = 1 pu, coupling removed): the
+    network's own change, -Δ|Z_ii| / |Z_ii'| in relative terms (F3)."""
     frames = []
     for case in corridors:
         for metric, site in UNITS:
             r = (series(values, "m", metric, site, case) / series(values, "m", metric, site, INTACT) - 1)
+            r_net = series(values, "Z", metric, site, case) / series(values, "Z", metric, site, INTACT) - 1
             frames.append(pd.DataFrame({"case": case, "metric": metric, "site": site,
-                                        "hour_index": r.index, "r": r.to_numpy()}))
+                                        "hour_index": r.index, "r": r.to_numpy(),
+                                        "r_network": r_net.reindex(r.index).to_numpy()}))
+    return pd.concat(frames, ignore_index=True)
+
+
+def miif_hourly(runs, corridors):
+    """ESCR's r per hour, corridor and site under each MIIF variant, with the network's own
+    change r_network (the same for every variant: Z_ii does not depend on the MIIF) (F4)."""
+    frames = []
+    for variant, values in runs:
+        for case in corridors:
+            for site in SITE_IDS:
+                r = series(values, "m", "ESCR", site, case) / series(values, "m", "ESCR", site, INTACT) - 1
+                r_net = series(values, "Z", "ESCR", site, case) / series(values, "Z", "ESCR", site, INTACT) - 1
+                frames.append(pd.DataFrame({"variant": variant, "case": case, "site": site,
+                                            "hour_index": r.index, "r": r.to_numpy(),
+                                            "r_network": r_net.reindex(r.index).to_numpy()}))
     return pd.concat(frames, ignore_index=True)
 
 
@@ -545,7 +612,139 @@ def _count(mask):
     return f"{int(mask.sum())}/{len(mask)}"
 
 
-def build_summary(data, ctx, out, cases, corridors):
+def claim_rows(out, ctx, ctx_e5, values, e5_values):
+    """The numbers the text and captions quote, one row each: claim (C1-C9, captions), item,
+    result and source table. report.md formats exactly these rows."""
+    rows = []
+
+    def add(claim, item, result, table):
+        rows.append({"claim": claim, "item": item, "result": result, "table": table})
+
+    def pct(x, digits=1):
+        return f"{100 * float(x):.{digits}f} %"
+
+    def week(vals, metric, site):
+        return series(vals, "m", metric, site, INTACT)
+
+    d1, d4, d4h = out["d1_weakest_hour"], out["d4_outage"], out["d4_hourly"]
+    e5w, t3, d5d = out["e5_weakest_hour"], out["t3_commitment"], out["d5_dispatch"]
+    mh, mv, par = out["miif_hourly"], out["miif_variants"], out["parallel_circuits"]
+    lam = ctx["load_scale"]
+
+    c = "C1 / D1 (E1): weakest hour under the unit-commitment rule"
+    intact = d1[d1["case"] == INTACT]
+    exc = d1[~d1["t_star_in_B_count"]]
+    add(c, "weakest hour in the fewest-committed-units hours, intact",
+        f"{int(intact['t_star_in_B_count'].sum())}/{len(intact)}", "d1_weakest_hour")
+    add(c, "same, all cases (intact and outages)", f"{int(d1['t_star_in_B_count'].sum())}/{len(d1)}",
+        "d1_weakest_hour")
+    add(c, "confirmation: Z_ii-only weakest hour in those hours",
+        f"{int(d1['Z_ii_only_t_star_in_B_count'].sum())}/{len(d1)}", "d1_weakest_hour")
+    add(c, "exceptions and their explanation", f"{len(exc)}: " + (", ".join(
+        f"{k} {v}" for k, v in exc["explanation"].value_counts().items()) or "none"), "d1_weakest_hour")
+    add(c, "exceptions in the intact case", int((exc["case"] == INTACT).sum()), "d1_weakest_hour")
+    add(c, "metrics with exceptions", ", ".join(sorted(exc["metric"].unique())) or "none", "d1_weakest_hour")
+    r1 = [week(values, m, s).max() / week(values, m, s).min() - 1 for m, s in UNITS]
+    add(c, "week range per metric-site (max / min - 1)", f"{pct(min(r1))} to {pct(max(r1))}", "metric values")
+
+    c = "C2 / RQ2 (E5): every generator on line"
+    add(c, "load scale at the weakest hour",
+        f"{e5w['load_scale_at_t_star'].min():.2f} to {e5w['load_scale_at_t_star'].max():.2f}", "e5_weakest_hour")
+    add(c, "Z_ii-only weakest hour", ", ".join(sorted(set(e5w["t_star_Z_ii_only"].astype(str)))),
+        "e5_weakest_hour")
+    add(c, "minimum-load hour", int(lam.idxmin()), "load scale")
+    add(c, "actual weakest hour equals the Z_ii-only one", f"{int(e5w['t_star_equals_Z_ii_only'].sum())}/{len(e5w)}",
+        "e5_weakest_hour")
+    add(c, "Δln |V| part, Z_ii-only to actual weakest hour", f"{e5w['dln_V'].min():.3f} to {e5w['dln_V'].max():.3f}",
+        "e5_weakest_hour")
+    add(c, "Δln Z_ii part, same", f"{e5w['dln_Z_ii'].min():.3f} to {e5w['dln_Z_ii'].max():.3f}", "e5_weakest_hour")
+    r5 = [week(e5_values, m, s).max() / week(e5_values, m, s).min() - 1 for m, s in UNITS]
+    add(c, "week range per metric-site (max / min - 1)", f"{pct(min(r5))} to {pct(max(r5))}", "metric values")
+    for metric, site in UNITS:
+        if metric in ("SCR", "WSCR"):
+            w = week(e5_values, metric, site)
+            add(c, f"{metric} {site}: share of hours within {NEAR_MIN_PCT:g} % of the minimum",
+                pct((w <= w.min() * (1 + NEAR_MIN_PCT / 100)).mean(), 0), "metric values")
+
+    c = "C3 / D5: the minimum-load snapshot"
+    add(c, "largest gap to the weekly minimum, E1", f"{t3['E1_gap_minimum_pct'].max():.2f} %", "t3_commitment")
+    add(c, "largest gap, E5 minimum load", f"{t3['E5_gap_minimum_pct'].max():.2f} %", "t3_commitment")
+    add(c, "largest gap, E5 worse of minimum and peak load", f"{t3['E5_gap_worse_pct'].max():.2f} %", "t3_commitment")
+    for r in d5d.itertuples():
+        add(c, f"committed units fall as load rises [{r.network}]", f"{r.n_decreases_as_load_rises} times",
+            "d5_dispatch")
+
+    c = "C4 / RQ1: agreement between metrics"
+    add(c, "E1 weakest hours", ", ".join(sorted(set(t3["E1_t_star"].astype(str)))), "t3_commitment")
+    add(c, "E5 weakest hours", ", ".join(sorted(set(t3["E5_t_star"].astype(str)))), "t3_commitment")
+    add(c, "E5 weakest hours span", f"{int(t3['E5_t_star'].max() - t3['E5_t_star'].min())} h", "t3_commitment")
+
+    c = "C5 / D4(a): what an outage does to the network"
+    add(c, "network-only change, most strengthening", pct(d4h["r_network"].max(), 2), "d4_hourly")
+    low = d4h.loc[d4h["r_network"].idxmin()]
+    add(c, "network-only change, most weakening", pct(low["r_network"], 0), "d4_hourly")
+    add(c, "most weakening at", f"{low['case']} / {low['metric']} / site {low['site']} / hour {int(low['hour_index'])}",
+        "d4_hourly")
+
+    c = "C6 / D4(b): SCR and WSCR follow the network"
+    c7 = "C7 / D4(c): the coupling metrics occasionally oppose it"
+    for metric in METRICS:
+        g = d4h[d4h["metric"] == metric]
+        claim = c if metric in ("SCR", "WSCR") else c7
+        add(claim, f"{metric}: correlation of metric and network change",
+            f"{np.corrcoef(g['r_network'], g['r'])[0, 1]:.3f}", "d4_hourly")
+        add(claim, f"{metric}: share of points > {MATERIAL_PCT:g} % stronger",
+            pct((g["r"] > MATERIAL_PCT / 100).mean()), "d4_hourly")
+        add(claim, f"{metric}: points > {MATERIAL_PCT:g} % stronger while the network weakens",
+            int(((g["r_network"] < 0) & (g["r"] > MATERIAL_PCT / 100)).sum()), "d4_hourly")
+        add(claim, f"{metric}: largest change toward stronger", pct(g["r"].max(), 2), "d4_hourly")
+    for metric in ("SDSCR", "ESCR"):
+        part = d4[d4["metric"] == metric]
+        add(c7, f"{metric}: stronger hours where the coupling load falls",
+            f"{int(part['n_stronger_coupling_load_falls'].sum())}/{int(part['n_hours_stronger'].sum())}", "d4_outage")
+        for label, col in (("as computed", "share_hours_stronger"), ("|V| = 1 pu", "share_hours_stronger_V_1pu"),
+                           ("coupling removed", "share_hours_stronger_coupling_removed"),
+                           ("Z_ii only", "share_hours_stronger_Z_ii_only")):
+            add(c7, f"{metric}: share of hours stronger, {label}", pct(part[col].mean()), "d4_outage")
+
+    c = "C8 / RQ3 (E3): ESCR's interaction factor"
+    ref = mv[mv["variant"] == REFERENCE_VARIANT].set_index(["case", "site"])["t_star"]
+    for variant, g in mh.groupby("variant", sort=False):
+        add(c, f"{variant}: share of points > {MATERIAL_PCT:g} % stronger", pct((g["r"] > MATERIAL_PCT / 100).mean()),
+            "miif_hourly")
+        add(c, f"{variant}: largest change toward stronger", pct(g["r"].max(), 1), "miif_hourly")
+        if variant != REFERENCE_VARIANT:
+            agree = mv[mv["variant"] == variant].set_index(["case", "site"])["t_star"] == ref
+            add(c, f"{variant}: weakest hour as under {REFERENCE_VARIANT}", f"{int(agree.sum())}/{len(agree)}",
+                "miif_variants")
+
+    c = "C9 / checks"
+    add(c, "parallel circuits: same weakest hour as circuit 1", f"{int(par['same_t_star'].sum())}/{len(par)}",
+        "parallel_circuits")
+    add(c, "parallel circuits: max |Δln| against circuit 1", f"{par['max_abs_dln'].max():.4f}", "parallel_circuits")
+    add(c, "denominators (rated, MVA) change no conclusion", bool(out["a3_denominators"]["unchanged"].all()),
+        "a3_denominators")
+
+    c = "captions"
+    for r in d5d.itertuples():
+        add(c, f"F2: fewest committed units under the rule [{r.network}]",
+            f"{r.min_n_committed} units, hours {r.B_count}", "d5_dispatch")
+    add(c, "F2: committed units with every generator on line (E5)",
+        ", ".join(str(n) for n in sorted(set(t3["E5_n_committed"]))), "t3_commitment")
+    add(c, "F2a: minimum and peak load (load scale, hour)",
+        f"{lam.min():.2f} at {int(lam.idxmin())}; {lam.max():.2f} at {int(lam.idxmax())}", "load scale")
+    add(c, "F3: display window", f"down to {F3_FLOOR_PCT:g} %", "config")
+    for metric in METRICS:
+        g = d4h[d4h["metric"] == metric]
+        beyond = (100 * g["r_network"] < F3_FLOOR_PCT) | (100 * g["r"] < F3_FLOOR_PCT)
+        add(c, f"F3: {metric} points beyond the window (of all, lowest value)",
+            f"{int(beyond.sum())}/{len(g)}, {pct(min(g['r'].min(), g['r_network'].min()), 0)}", "d4_hourly")
+    return pd.DataFrame(rows)
+
+
+def build_summary(data, ctx, cases):
+    """The run's inputs: hours, scenarios, input SHA-256, minimum-commitment hours. The claims
+    and captions follow as claim_rows."""
     rows = []
 
     def add(claim, item, result, table=""):
@@ -557,91 +756,6 @@ def build_summary(data, ctx, out, cases, corridors):
         add("inputs", f"SHA-256 {f}", h)
     for network, b in ctx["b_count"].items():
         add("inputs", f"minimum-commitment hours B_count [{network}]", _join(sorted(b)))
-
-    d1 = out["d1_weakest_hour"]
-    c = "D1/RQ2 weakest hour is a minimum-commitment hour"
-    add(c, "mechanism: Z_ii-only weakest hour in B_count", _count(d1["Z_ii_only_t_star_in_B_count"]),
-        "d1_weakest_hour")
-    add(c, "observation: weakest hour in B_count", _count(d1["t_star_in_B_count"]), "d1_weakest_hour")
-    add(c, "weakest hour equals the Z_ii-only weakest hour", _count(d1["t_star_equals_Z_ii_only"]),
-        "d1_weakest_hour")
-    for explanation, n in d1["explanation"].value_counts().items():
-        add(c, f"explanation: {explanation}", int(n), "d1_weakest_hour")
-    outside = d1[~d1["t_star_in_B_count"]]
-    add(c, "exceptions (case/metric/site: explanation)", _join(
-        f"{r.case}/{r.metric}/{r.site}: {r.explanation}" for r in outside.itertuples()) or "none",
-        "d1_weakest_hour")
-
-    d4 = out["d4_outage"]
-
-    def pct(x):
-        return f"{100 * float(x):.1f} %"
-
-    # every corridor-site has the same number of hours, so the mean of shares is the pooled share
-    c = "D4 in network terms an outage weakens a site or leaves it practically unaffected"
-    add(c, "network (Z_ii only): largest change toward stronger",
-        pct(d4["max_r_Z_ii_only"].max()), "d4_outage")
-
-    c = "D4 hours with metric_contingency > metric_intact"
-    for metric in METRICS:
-        part = d4[d4["metric"] == metric]
-        add(c, f"{metric}: as computed / |V| = 1 pu / coupling removed / Z_ii only",
-            " / ".join(pct(part[col].mean()) for col in (
-                "share_hours_stronger", "share_hours_stronger_V_1pu",
-                "share_hours_stronger_coupling_removed", "share_hours_stronger_Z_ii_only")), "d4_outage")
-        if part["n_hours_stronger"].sum():
-            add(c, f"  {metric}: size r when stronger, median / largest",
-                f"{part['median_r_stronger'].median():.4g} / {part['max_r_stronger'].max():.4g}", "d4_outage")
-
-    c = "D4 coupling metrics move against the network when the outage decouples the sites"
-    for metric in ("ESCR", "SDSCR"):
-        part = d4[d4["metric"] == metric]
-        add(c, f"{metric}: stronger hours where the coupling load k falls",
-            f"{int(part['n_stronger_coupling_load_falls'].sum())}/{int(part['n_hours_stronger'].sum())}",
-            "d4_outage")
-    escr = d4[d4["metric"] == "ESCR"]
-    add(c, "ESCR: stronger hours in MIIF ≈ 0 outage states",
-        f"{int(escr['n_stronger_IF_zero_outage'].sum())}/{int(escr['n_hours_stronger'].sum())}", "d4_outage")
-
-    d5, dispatch = out["d5_snapshots"], out["d5_dispatch"]
-    c = "D5 light-load snapshot almost finds the weekly minimum"
-    for r in dispatch.itertuples():
-        add(c, f"mechanism: committed count falls as load rises [{r.network}]",
-            f"{r.n_decreases_as_load_rises} times", "d5_dispatch")
-    light = int(ctx["load_scale"].idxmin())
-    for network, b in ctx["b_count"].items():
-        add(c, f"light-load hour {light} in B_count [{network}]", light in b, "d5_snapshots")
-    add(c, "snapshot is the weekly minimum", _count(d5["snapshot_is_weekly_min"]), "d5_snapshots")
-    worst = d5.loc[d5["g"].idxmax()]
-    add(c, "largest gap g", float(worst["g"]), "d5_snapshots")
-    add(c, "largest gap at", f"{worst['case']}/{worst['metric']}/{worst['site']}", "d5_snapshots")
-    add(c, "largest gap: Δln from |V| / coupling / Z_ii",
-        f"{worst['dln_V']:.4g} / {worst['dln_coupling']:.4g} / {worst['dln_Z_ii']:.4g}", "d5_snapshots")
-
-    add("A3 denominators change no conclusion", "unchanged under rated and MVA",
-        bool(out["a3_denominators"]["unchanged"].all()), "a3_denominators")
-    add("A3 denominators change no conclusion", "max relative reconstruction difference",
-        float(out["reconstruction_check"]["max_rel_diff"].max()), "reconstruction_check")
-
-    if "miif_variants" in out:
-        rob = out["miif_variants"]
-        c = "check ESCR MIIF variants (E3)"
-        ref_variant = rob["variant"].iloc[0]
-        ref = rob[rob["variant"] == ref_variant].set_index(["case", "site"])
-        variants = list(dict.fromkeys(rob["variant"]))
-        add(c, "ESCR hours with contingency > intact, per variant", " | ".join(
-            f"{v}: {pct(rob[(rob['variant'] == v) & (rob['case'] != INTACT)]['share_hours_stronger'].mean())}"
-            for v in variants), "miif_variants")
-        add(c, f"ESCR weakest hour unchanged from {ref_variant}", " | ".join(
-            f"{v}: {_count(rob[rob['variant'] == v].set_index(['case', 'site'])['t_star'] == ref['t_star'])}"
-            for v in variants if v != ref_variant), "miif_variants")
-
-    par = out["parallel_circuits"]
-    if not par.empty:
-        add("check parallel circuits", "same weakest hour as circuit 1", _count(par["same_t_star"]),
-            "parallel_circuits")
-        add("check parallel circuits", "max |Δln| against circuit 1", float(par["max_abs_dln"].max()),
-            "parallel_circuits")
     return pd.DataFrame(rows)
 
 
@@ -651,6 +765,13 @@ def run(input_dir=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT):
     if input_dir == output_dir:
         raise ValueError("Output directory must differ from the input directory")
     raw = read_run(input_dir)
+    raw_manifest = raw["manifest"]
+    if not raw_manifest or raw_manifest.get("stage") != "simulate":
+        raise ValueError(f"{input_dir} has no simulate manifest; run the simulate stage")
+    if not raw_manifest.get("git_commit"):
+        print(f"warning: raw run {raw_manifest['run_id']} names no commit (not a git checkout)")
+    elif not raw_manifest.get("of_record"):
+        print(f"warning: raw run {raw_manifest['run_id']} is not of record (uncommitted changes)")
     data = view(raw)
     hours, _ = check_inputs(data)
     corridors, representative = scenarios(data["contingencies"])
@@ -676,12 +797,26 @@ def run(input_dir=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT):
         check_reconstruction(alt["metrics"], alt_values)
         runs.append((variant, alt_values))
     out["miif_variants"] = miif_variants(runs, cases, corridors)
-    out["summary"] = build_summary(data, ctx, out, cases, corridors)
+    out["miif_hourly"] = miif_hourly(runs, corridors)
+
+    # E5: the intact network with every unit online (RQ2, D5); no outages
+    e5 = view(raw, REFERENCE_VARIANT, ALL_ONLINE)
+    e5_hours, _ = check_inputs(e5, cases=[INTACT])
+    ctx_e5 = build_context(e5, e5_hours)
+    e5_values = variant_values(e5["variables"], {m: P_MW[AS_RUN[m]] for m in METRICS})
+    check_reconstruction(e5["metrics"], e5_values)
+    weakest = d1_weakest_hour(e5_values, ctx_e5, [INTACT])
+    out["e5_weakest_hour"] = weakest.drop(columns=[  # every hour has every unit online
+        "B_count", "t_star_in_B_count", "Z_ii_only_t_star_in_B_count", "explanation"])
+    out["e5_snapshots"] = d5_snapshots(e5_values, ctx_e5, [INTACT]).drop(columns="t_minimum_in_B_count")
+    out["t3_commitment"] = t3_commitment(out["d1_weakest_hour"], out["d5_snapshots"], ctx,
+                                         weakest, out["e5_snapshots"], ctx_e5)
+    out["summary"] = pd.concat([build_summary(data, ctx, cases),
+                                claim_rows(out, ctx, ctx_e5, values, e5_values)], ignore_index=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, frame in out.items():
-        frame.to_csv(output_dir / f"{name}.csv", index=False)
-    raw_manifest = raw["manifest"] or {}
+        (frame if name == "summary" else tag(name, frame)).to_csv(output_dir / f"{name}.csv", index=False)
     manifest.write(output_dir, "analyze", started=started,
                    inputs=[input_dir / f for f in INPUT_FILES],
                    outputs=[output_dir / f"{name}.csv" for name in out],

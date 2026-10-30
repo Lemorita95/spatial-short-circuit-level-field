@@ -1,6 +1,5 @@
 import numpy as np
-from scipy.sparse import coo_matrix, csc_matrix, issparse
-from scipy.sparse.linalg import splu
+from scipy.sparse import csc_matrix
 
 
 class ShortCircuit:
